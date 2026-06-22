@@ -42,3 +42,6 @@ dist/
 *.tmp
 .DS_Store
 Thumbs.db
+
+# --- Generated pipeline step reports (build/ already ignored above) ---
+scripts/ad_pipeline/reports/
