@@ -36,6 +36,21 @@ FINETUNE_PREPARED_DIR = DATA_DIR / "finetune_prepared"
 FINETUNE_RESULTS_DIR = DATA_DIR / "finetune_results"
 PREDICT_PREPARED_DIR = DATA_DIR / "predict_prepared"
 
+# Prediction parquet folders (written by the finetune runner's do_predict).
+TEST_PREDICTIONS_DIR = FINETUNE_RESULTS_DIR / "test_predictions"
+VAL_PREDICTIONS_DIR = FINETUNE_RESULTS_DIR / "validation_predictions"
+
+# Evaluation outputs (steps 10 / 10a) all live under a single build/ folder.
+BUILD_DIR = PROJECT_ROOT / "build"
+EVAL_RESULTS_DIR = BUILD_DIR
+FIGURES_DIR = BUILD_DIR / "figures"
+BUILD_REPORTS_DIR = BUILD_DIR / "reports"
+
+
+def build_report_dir_for(step_name: str) -> Path:
+    """Report directory for a step under the build/ folder, e.g. build/reports/10_evaluate."""
+    return BUILD_REPORTS_DIR / step_name
+
 COHORT_DIR = OMOP_DIR / "ad_cohort"
 # The labeled cohort is split up front (step 6) into a fine-tuning set and a held-out
 # test set, each in its own folder (cohort_folder reads *.parquet from a single folder).
