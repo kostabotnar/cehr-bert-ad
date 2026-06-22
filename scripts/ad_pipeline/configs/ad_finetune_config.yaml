@@ -1,0 +1,70 @@
+# CEHR-BERT Fine-tuning Configuration for Alzheimer's Disease Prediction
+#
+# This config is used by: python -m cehrbert.runners.hf_cehrbert_finetune_runner
+
+# Model paths (use pretrained model)
+model_name_or_path: "data/pretrain_results"
+tokenizer_name_or_path: "data/pretrain_results"
+
+# Data paths
+# tokenized_full_dataset_path: Path to prepared/tokenized dataset from pretraining
+# This enables the extract_cohort_sequences flow which properly applies observation_window
+tokenized_full_dataset_path: "data/pretrain_prepared"
+data_folder: "data/cehrbert_data/patient_sequence"  # Not used when tokenized_full_dataset_path is set
+# Fine-tuning uses ONLY the fine-tuning split of the cohort (step 6 holds out a test set).
+cohort_folder: "data/omop_data/ad_cohort/finetune"
+dataset_prepared_path: "data/finetune_prepared"
+
+# Observation window: use 1 year of history before index_date
+# This is applied via extract_cohort_sequences when tokenized_full_dataset_path is set
+observation_window: 365
+
+# Fraction of the fine-tuning cohort used for validation (the rest is training).
+# The held-out TEST set is a separate cohort created in step 6 and scored in step 9.
+validation_split_percentage: 0.1
+
+# Data processing
+preprocessing_num_workers: 4
+preprocessing_batch_size: 1000
+streaming: false
+
+# Tokenizer settings
+vocab_size: 50000
+min_frequency: 0
+
+# Model architecture settings
+att_function_type: "cehrbert"
+is_data_in_meds: false
+inpatient_att_function_type: "none"
+include_auxiliary_token: true
+
+# Training settings. Prediction is a SEPARATE step (step 9) on the held-out test cohort,
+# so fine-tuning only trains and evaluates here.
+do_train: true
+do_eval: true
+do_predict: false
+seed: 42
+
+# Model dimensions
+num_hidden_layers: 6
+max_position_embeddings: 512
+
+# Output and checkpointing
+output_dir: "data/finetune_results"
+evaluation_strategy: "epoch"
+save_strategy: "epoch"
+
+# Optimization
+learning_rate: 0.00002
+per_device_train_batch_size: 16
+per_device_eval_batch_size: 16
+num_train_epochs: 20
+warmup_steps: 500
+weight_decay: 0.01
+
+# Logging and model selection
+logging_steps: 50
+save_total_limit: 3
+load_best_model_at_end: true
+metric_for_best_model: "eval_loss"
+greater_is_better: false

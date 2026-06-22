@@ -1,0 +1,44 @@
+# --- Clinical / project data (do NOT commit) ---
+OMOP_AD_Outcome/
+data/
+
+# --- Editor / IDE ---
+.idea/
+
+# --- Claude Code settings ---
+.claude/
+
+# --- Python virtual environments ---
+.venv/
+venv/
+env/
+ENV/
+
+# --- Python caches / build artifacts ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+*.egg
+build/
+dist/
+.eggs/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+
+# --- Large data file types (safety net) ---
+*.parquet
+*.feather
+*.h5
+*.hdf5
+*.ckpt
+*.pt
+*.pth
+
+# --- Logs / temp ---
+*.log
+*.tmp
+.DS_Store
+Thumbs.db
