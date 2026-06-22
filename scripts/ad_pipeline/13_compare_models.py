@@ -278,23 +278,38 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Compare baselines against CEHR-BERT")
     parser.add_argument("--models", nargs="+", default=["lr", "xgboost"],
                         help="Baseline model keys to evaluate and compare")
-    parser.add_argument("--baselines-dir", default=str(paths.BUILD_DIR / "baselines"),
-                        help="Directory holding per-baseline prediction/metric folders")
-    parser.add_argument("--cehrbert-metrics", default=str(paths.BUILD_DIR / "metrics.json"),
-                        help="Existing CEHR-BERT metrics.json")
+    parser.add_argument("--window-days", type=int, default=paths.DEFAULT_WINDOW_DAYS,
+                        help="Look-back window in days; negative or 0 => unbounded (all history)")
+    parser.add_argument("--ctx", type=int, default=paths.DEFAULT_CTX,
+                        help="CEHR-BERT token cap; part of the run label")
+    parser.add_argument("--baselines-dir", default=None,
+                        help="Directory holding per-baseline prediction/metric folders "
+                             "(default: per-run baselines_dir for the run label)")
+    parser.add_argument("--cehrbert-metrics", default=None,
+                        help="Existing CEHR-BERT metrics.json "
+                             "(default: per-run eval_results_dir/metrics.json)")
     parser.add_argument("--cehrbert-predictions", default=str(paths.TEST_PREDICTIONS_DIR),
                         help="CEHR-BERT test predictions folder (for overlaid curves)")
-    parser.add_argument("--figures-dir", default=str(paths.FIGURES_DIR),
-                        help="Where to save compare_roc.png / compare_pr.png")
+    parser.add_argument("--figures-dir", default=None,
+                        help="Where to save compare_roc.png / compare_pr.png "
+                             "(default: per-run figures_dir for the run label)")
     parser.add_argument("--skip-eval", action="store_true",
                         help="Skip re-running 10_evaluate; reuse existing metrics.json")
-    parser.add_argument("--report-dir", default=str(paths.build_report_dir_for("13_compare_models")))
+    parser.add_argument("--report-dir", default=None,
+                        help="Report dir (default: per-run report dir for the run label)")
     args = parser.parse_args(argv)
+
+    label = paths.run_label(args.window_days, args.ctx)
+    baselines_dir = Path(args.baselines_dir) if args.baselines_dir else paths.baselines_dir(label)
+    figures_dir = Path(args.figures_dir) if args.figures_dir else paths.figures_dir(label)
+    cehrbert_metrics = (Path(args.cehrbert_metrics) if args.cehrbert_metrics
+                        else paths.eval_results_dir(label) / "metrics.json")
+    report_dir = (Path(args.report_dir) if args.report_dir
+                  else paths.build_report_dir_for("13_compare_models", label))
 
     report = StepReport("13_compare_models",
                         title="Step 13 - Compare baselines vs CEHR-BERT")
-    baselines_dir = Path(args.baselines_dir)
-    figures_dir = Path(args.figures_dir)
+    report.add_metric("run_label", label)
     report.add_metric("models", list(args.models))
     report.add_metric("baselines_dir", str(baselines_dir))
 
@@ -308,7 +323,7 @@ def main(argv: list[str] | None = None) -> int:
     # --- 2. load all metrics.json ------------------------------------------
     # (label, metrics_path, test_pred_dir)
     sources: list[tuple[str, Path, Path]] = [
-        (CEHRBERT_LABEL, Path(args.cehrbert_metrics), Path(args.cehrbert_predictions)),
+        (CEHRBERT_LABEL, cehrbert_metrics, Path(args.cehrbert_predictions)),
     ]
     for model in args.models:
         label = MODEL_LABELS.get(model, model)
@@ -377,9 +392,9 @@ def main(argv: list[str] | None = None) -> int:
                      detail=str(figures_dir / "compare_pr.png"))
 
     # --- 5. finalize --------------------------------------------------------
-    report.write(args.report_dir)
+    report.write(report_dir)
     report.print_summary()
-    print(f"\nReport written to {args.report_dir}")
+    print(f"\nReport written to {report_dir}")
     return report.exit_code()
 
 

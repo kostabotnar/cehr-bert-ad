@@ -40,35 +40,44 @@ from pipeline import baselines as bl  # noqa: E402
 from pipeline import paths  # noqa: E402
 from pipeline.reporting import StepReport  # noqa: E402
 
-FEATURES_DIR = paths.BUILD_DIR / "baselines" / "features"
-
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Build baseline feature matrices")
     parser.add_argument("--data-dir", default=str(paths.OMOP_DIR))
     parser.add_argument("--finetune-dir", default=str(paths.COHORT_FINETUNE_DIR))
     parser.add_argument("--test-dir", default=str(paths.COHORT_TEST_DIR))
-    parser.add_argument("--val-predictions", default=str(paths.VAL_PREDICTIONS_DIR),
-                        help="CEHR-BERT validation_predictions folder (defines the val split)")
-    parser.add_argument("--output-dir", default=str(FEATURES_DIR))
-    parser.add_argument("--window-days", type=int, default=bl.DEFAULT_WINDOW_DAYS)
+    parser.add_argument("--prepared-dir", default=str(paths.FINETUNE_PREPARED_DIR),
+                        help="CEHR-BERT tokenized finetune dataset (its validation split defines val)")
+    parser.add_argument("--output-dir", default=None,
+                        help="Features output dir (default: per-run features_dir for the run label)")
+    parser.add_argument("--window-days", type=int, default=paths.DEFAULT_WINDOW_DAYS,
+                        help="Look-back window in days; negative or 0 => unbounded (all history)")
+    parser.add_argument("--ctx", type=int, default=paths.DEFAULT_CTX,
+                        help="CEHR-BERT token cap; part of the run label")
     parser.add_argument("--min-prevalence", type=float, default=bl.DEFAULT_MIN_PREVALENCE)
-    parser.add_argument("--report-dir", default=str(paths.build_report_dir_for("11_prepare_baseline_features")))
+    parser.add_argument("--report-dir", default=None,
+                        help="Report dir (default: per-run report dir for the run label)")
     args = parser.parse_args(argv)
+
+    label = paths.run_label(args.window_days, args.ctx)
+    out_dir = Path(args.output_dir) if args.output_dir else paths.features_dir(label)
+    report_dir = (Path(args.report_dir) if args.report_dir
+                  else paths.build_report_dir_for("11_prepare_baseline_features", label))
 
     report = StepReport("11_prepare_baseline_features",
                         title="Step 11 - Prepare baseline feature matrices")
     data_dir = Path(args.data_dir).resolve()
-    out_dir = Path(args.output_dir)
+    report.add_metric("run_label", label)
     report.add_metric("data_dir", str(data_dir))
     report.add_metric("window_days", args.window_days)
+    report.add_metric("ctx", args.ctx)
     report.add_metric("min_prevalence", args.min_prevalence)
 
     # --- recover the shared train/val/test partition -----------------------
-    splits = bl.recover_splits(args.finetune_dir, args.test_dir, args.val_predictions)
+    splits = bl.recover_splits(args.finetune_dir, args.test_dir, args.prepared_dir)
     report.add_metric("val_split_source", splits.val_source)
-    report.warn("val split taken from CEHR-BERT validation_predictions",
-                ok=splits.val_source == "cehrbert_validation_predictions",
+    report.warn("val split taken from CEHR-BERT tokenized validation split",
+                ok=splits.val_source == "cehrbert_prepared_validation_split",
                 detail=f"source={splits.val_source} (fallback = deterministic 10% of finetune)")
     for name, df in (("train", splits.train), ("val", splits.val), ("test", splits.test)):
         n_pos = int(df.filter(pl.col("label") == 1).height)
@@ -96,6 +105,7 @@ def main(argv: list[str] | None = None) -> int:
     spec = bl.fit_feature_spec(
         counts["train"], demo["train"], n_train=splits.train.height,
         min_prevalence=args.min_prevalence, window_days=args.window_days,
+        domain_encoding=bl.DOMAIN_ENCODING,
     )
     report.add_metric("n_code_features", len(spec.code_features))
     report.add_metric("n_features_total", len(spec.feature_names))
@@ -109,7 +119,8 @@ def main(argv: list[str] | None = None) -> int:
     for name in ("train", "val", "test"):
         X, y, pids, idates = bl.assemble_matrix(cohorts[name], counts[name], demo[name], spec)
         bl.save_split(out_dir, name, X, y, pids, idates)
-        density = X.nnz / (X.shape[0] * X.shape[1]) if X.shape[1] else 0.0
+        cells = X.shape[0] * X.shape[1]
+        density = X.nnz / cells if cells else 0.0
         report.add_metric(f"{name}_matrix_shape", f"{X.shape[0]}x{X.shape[1]}")
         report.add_metric(f"{name}_density", round(density, 5))
         report.add_check(f"{name} matrix rows match cohort", X.shape[0] == cohorts[name].height,
@@ -117,9 +128,9 @@ def main(argv: list[str] | None = None) -> int:
         report.add_artifact(out_dir / f"{name}_X.npz")
 
     report.add_artifact(out_dir / "feature_spec.json")
-    report.write(args.report_dir)
+    report.write(report_dir)
     report.print_summary()
-    print(f"\nReport written to {args.report_dir}")
+    print(f"\nReport written to {report_dir}")
     if report.passed:
         print("Next: python 12_train_baselines.py")
     return report.exit_code()

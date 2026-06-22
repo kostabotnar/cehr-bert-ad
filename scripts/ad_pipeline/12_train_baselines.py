@@ -57,9 +57,6 @@ from pipeline import paths  # noqa: E402
 from pipeline.baseline_predictions import write_predictions  # noqa: E402
 from pipeline.reporting import StepReport  # noqa: E402
 
-FEATURES_DIR = paths.BUILD_DIR / "baselines" / "features"
-OUTPUT_DIR = paths.BUILD_DIR / "baselines"
-
 
 def _build_lr_search(cv: StratifiedKFold) -> GridSearchCV:
     """L2 logistic regression pipeline + grid over C and class_weight."""
@@ -145,21 +142,32 @@ def _write_model_outputs(
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Train classical-ML baselines for the AD task")
-    parser.add_argument("--features-dir", default=str(FEATURES_DIR),
-                        help="Folder of {train,val,test}_X.npz / *_meta.npz from step 11")
-    parser.add_argument("--output-dir", default=str(OUTPUT_DIR),
-                        help="Parent folder for lr/ and xgboost/ outputs")
+    parser.add_argument("--features-dir", default=None,
+                        help="Folder of {train,val,test}_X.npz / *_meta.npz from step 11 "
+                             "(default: per-run features_dir for the run label)")
+    parser.add_argument("--output-dir", default=None,
+                        help="Parent folder for lr/ and xgboost/ outputs "
+                             "(default: per-run baselines_dir for the run label)")
+    parser.add_argument("--window-days", type=int, default=paths.DEFAULT_WINDOW_DAYS,
+                        help="Look-back window in days; negative or 0 => unbounded (all history)")
+    parser.add_argument("--ctx", type=int, default=paths.DEFAULT_CTX,
+                        help="CEHR-BERT token cap; part of the run label")
     parser.add_argument("--cv-folds", type=int, default=5)
     parser.add_argument("--xgb-iter", type=int, default=30,
                         help="Number of RandomizedSearchCV samples for XGBoost")
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--report-dir",
-                        default=str(paths.build_report_dir_for("12_train_baselines")))
+    parser.add_argument("--report-dir", default=None,
+                        help="Report dir (default: per-run report dir for the run label)")
     args = parser.parse_args(argv)
 
+    label = paths.run_label(args.window_days, args.ctx)
+    features_dir = Path(args.features_dir) if args.features_dir else paths.features_dir(label)
+    output_dir = Path(args.output_dir) if args.output_dir else paths.baselines_dir(label)
+    report_dir = (Path(args.report_dir) if args.report_dir
+                  else paths.build_report_dir_for("12_train_baselines", label))
+
     report = StepReport("12_train_baselines", title="Step 12 - Train classical-ML baselines")
-    features_dir = Path(args.features_dir)
-    output_dir = Path(args.output_dir)
+    report.add_metric("run_label", label)
     report.add_metric("features_dir", str(features_dir))
     report.add_metric("output_dir", str(output_dir))
     report.add_metric("cv_folds", args.cv_folds)
@@ -170,7 +178,7 @@ def main(argv: list[str] | None = None) -> int:
     if not report.add_check("feature matrices exist",
                             features_dir.is_dir() and (features_dir / "train_X.npz").exists(),
                             detail=str(features_dir)):
-        return _finalize(report, args.report_dir)
+        return _finalize(report, report_dir)
 
     X_train, y_train, train_pids, train_dates = bl.load_split(features_dir, "train")
     X_val, y_val, val_pids, val_dates = bl.load_split(features_dir, "val")
@@ -188,7 +196,7 @@ def main(argv: list[str] | None = None) -> int:
                             detail=f"train={len(y_train)}/{int(np.sum(y_train))}+ "
                                    f"val={len(y_val)}/{int(np.sum(y_val))}+ "
                                    f"test={len(y_test)}/{int(np.sum(y_test))}+"):
-        return _finalize(report, args.report_dir)
+        return _finalize(report, report_dir)
 
     cv = StratifiedKFold(n_splits=args.cv_folds, shuffle=True, random_state=args.seed)
 
@@ -269,7 +277,7 @@ def main(argv: list[str] | None = None) -> int:
         val_pids, val_dates, y_val, xgb_prob_val,
     )
 
-    return _finalize(report, args.report_dir)
+    return _finalize(report, report_dir)
 
 
 def _finalize(report: StepReport, report_dir: str) -> int:

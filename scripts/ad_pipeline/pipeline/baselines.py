@@ -50,6 +50,11 @@ DOMAINS: List[Tuple[str, str, str, str]] = [
 DEFAULT_WINDOW_DAYS = 365
 DEFAULT_MIN_PREVALENCE = 0.01
 
+# Per-domain feature encoding. Conditions become presence/absence indicators (binary),
+# while drugs and procedures keep their raw occurrence counts. ``assemble_matrix`` maps a
+# feature's "<domain>:<concept_id>" prefix through this table (default "count" if unknown).
+DOMAIN_ENCODING: Dict[str, str] = {"cond": "binary", "drug": "count", "proc": "count"}
+
 
 # --------------------------------------------------------------------------- #
 # Cohort / split recovery
@@ -65,13 +70,31 @@ def load_cohort(folder: str | Path) -> pl.DataFrame:
     ).unique(subset="person_id").sort("person_id")
 
 
-def _val_person_ids_from_predictions(val_pred_dir: Path) -> List[int]:
-    """Recover the validation patients from CEHR-BERT's validation_predictions folder."""
-    if not val_pred_dir.is_dir() or not any(val_pred_dir.glob("*.parquet")):
+def _val_person_ids_from_prepared(prepared_dir: str | Path) -> List[int]:
+    """Recover the validation patients from CEHR-BERT's tokenized finetune dataset.
+
+    The fine-tuning dataset is saved as a DatasetDict under a hashed subdirectory with
+    ``train`` / ``validation`` splits, each carrying the real OMOP ``person_id``. This is
+    the authoritative record of which patients CEHR-BERT validated on. (The
+    ``validation_predictions`` parquet is *not* usable for this: its ``subject_id`` is a
+    hashed identifier that does not join back to ``person_id``.)
+    """
+    try:
+        from .dataset_checks import datasets_available, resolve_prepared_path
+
+        if not datasets_available():
+            return []
+        resolved = resolve_prepared_path(prepared_dir)
+        if resolved is None:
+            return []
+        from datasets import load_from_disk
+
+        dataset = load_from_disk(resolved)
+        if hasattr(dataset, "keys") and "validation" in dataset and "person_id" in dataset["validation"].column_names:
+            return [int(p) for p in dataset["validation"]["person_id"]]
+    except Exception:  # noqa: BLE001
         return []
-    vp = pl.read_parquet(str(val_pred_dir / "*.parquet"))
-    col = "subject_id" if "subject_id" in vp.columns else "person_id"
-    return vp.select(pl.col(col).cast(pl.Int64)).unique().get_column(col).to_list()
+    return []
 
 
 def _deterministic_val_ids(finetune: pl.DataFrame, val_fraction: float, seed: int) -> List[int]:
@@ -94,26 +117,27 @@ class Splits:
     train: pl.DataFrame
     val: pl.DataFrame
     test: pl.DataFrame
-    val_source: str  # "cehrbert_validation_predictions" or "deterministic_fallback"
+    val_source: str  # "cehrbert_prepared_validation_split" or "deterministic_fallback"
 
 
 def recover_splits(
     finetune_dir: str | Path = paths.COHORT_FINETUNE_DIR,
     test_dir: str | Path = paths.COHORT_TEST_DIR,
-    val_pred_dir: str | Path = paths.VAL_PREDICTIONS_DIR,
+    prepared_dir: str | Path = paths.FINETUNE_PREPARED_DIR,
     val_fraction: float = 0.1,
     seed: int = 42,
 ) -> Splits:
     """Build the train/val/test cohort frames shared by all baselines.
 
-    Val patients are taken from CEHR-BERT's validation_predictions when available (exact
-    parity); otherwise a deterministic 10% split of the finetune cohort is used.
+    Val patients are taken from CEHR-BERT's tokenized validation split when available
+    (exact parity); otherwise a deterministic 10% split of the finetune cohort is used.
     """
     finetune = load_cohort(finetune_dir)
     test = load_cohort(test_dir)
+    ft_ids = set(finetune.get_column("person_id").to_list())
 
-    val_ids = _val_person_ids_from_predictions(Path(val_pred_dir))
-    source = "cehrbert_validation_predictions"
+    val_ids = [pid for pid in _val_person_ids_from_prepared(prepared_dir) if pid in ft_ids]
+    source = "cehrbert_prepared_validation_split"
     if not val_ids:
         val_ids = _deterministic_val_ids(finetune, val_fraction, seed)
         source = "deterministic_fallback"
@@ -132,18 +156,28 @@ def _require_glob(data_dir: Path, table: str) -> str | None:
 
 
 def build_counts(cohort: pl.DataFrame, data_dir: str | Path, window_days: int) -> pl.DataFrame:
-    """Per-(person, concept) occurrence counts within [index_date - window, index_date).
+    """Per-(person, concept) occurrence counts strictly before each ``index_date``.
+
+    When ``window_days`` is ``None`` or negative the look-back is unbounded ("all history"):
+    only the upper bound ``event_date < index_date`` is applied. Otherwise events are limited
+    to ``[index_date - window_days, index_date)``.
 
     Returns a long frame: ``person_id, feature, count`` where ``feature`` is
     ``"<domain>:<concept_id>"``. Only patients in ``cohort`` are kept.
     """
     data_dir = Path(data_dir)
+    unbounded = window_days is None or window_days < 0
     index = cohort.lazy().select("person_id", "index_date")
     parts: List[pl.LazyFrame] = []
     for prefix, table, concept_col, date_col in DOMAINS:
         glob = _require_glob(data_dir, table)
         if glob is None:
             continue
+        date_filter = pl.col("event_date") < pl.col("index_date")
+        if not unbounded:
+            date_filter = date_filter & (
+                pl.col("event_date") >= pl.col("index_date") - pl.duration(days=window_days)
+            )
         events = (
             pl.scan_parquet(glob)
             .select(
@@ -153,10 +187,7 @@ def build_counts(cohort: pl.DataFrame, data_dir: str | Path, window_days: int) -
             )
             .filter(pl.col("concept_id").is_not_null() & (pl.col("concept_id") != 0))
             .join(index, on="person_id", how="inner")
-            .filter(
-                (pl.col("event_date") < pl.col("index_date"))
-                & (pl.col("event_date") >= pl.col("index_date") - pl.duration(days=window_days))
-            )
+            .filter(date_filter)
             .group_by("person_id", "concept_id")
             .agg(count=pl.len())
             .with_columns(
@@ -206,6 +237,7 @@ class FeatureSpec:
     age_median: float
     min_prevalence: float
     window_days: int
+    domain_encoding: Dict[str, str]   # domain prefix -> "binary" | "count"
 
     @property
     def feature_names(self) -> List[str]:
@@ -223,6 +255,7 @@ class FeatureSpec:
             "age_median": self.age_median,
             "min_prevalence": self.min_prevalence,
             "window_days": self.window_days,
+            "domain_encoding": dict(self.domain_encoding),
             "n_features": len(self.feature_names),
         }
 
@@ -235,6 +268,7 @@ class FeatureSpec:
             age_median=float(d["age_median"]),
             min_prevalence=float(d["min_prevalence"]),
             window_days=int(d["window_days"]),
+            domain_encoding=dict(d.get("domain_encoding", DOMAIN_ENCODING)),
         )
 
 
@@ -244,6 +278,7 @@ def fit_feature_spec(
     n_train: int,
     min_prevalence: float,
     window_days: int,
+    domain_encoding: Dict[str, str] = DOMAIN_ENCODING,
 ) -> FeatureSpec:
     """Select the kept concept vocabulary + demographic categories from training data only."""
     if train_counts.height:
@@ -276,6 +311,7 @@ def fit_feature_spec(
         age_median=age_median,
         min_prevalence=min_prevalence,
         window_days=window_days,
+        domain_encoding=dict(domain_encoding),
     )
 
 
@@ -304,9 +340,18 @@ def assemble_matrix(
     n_code = len(spec.code_features)
     if counts.height and n_code:
         c = counts.filter(pl.col("feature").is_in(spec.code_features))
+        features = c.get_column("feature").to_list()
         rows = np.fromiter((pid_to_row[int(p)] for p in c.get_column("person_id")), dtype=np.int64, count=c.height)
-        cols = np.fromiter((feat_to_col[f] for f in c.get_column("feature")), dtype=np.int64, count=c.height)
-        data = c.get_column("count").to_numpy().astype(np.float64)
+        cols = np.fromiter((feat_to_col[f] for f in features), dtype=np.int64, count=c.height)
+        raw = c.get_column("count").to_numpy().astype(np.float64)
+        # Per-domain encoding: "binary" domains (e.g. conditions) become 1.0 presence
+        # indicators; all others keep their raw occurrence count.
+        is_binary = np.fromiter(
+            (spec.domain_encoding.get(f.split(":", 1)[0], "count") == "binary" for f in features),
+            dtype=bool,
+            count=c.height,
+        )
+        data = np.where(is_binary, 1.0, raw)
         code_block = sp.coo_matrix((data, (rows, cols)), shape=(n_rows, n_code)).tocsr()
     else:
         code_block = sp.csr_matrix((n_rows, n_code))

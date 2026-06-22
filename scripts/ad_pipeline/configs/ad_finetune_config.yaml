@@ -15,9 +15,9 @@ data_folder: "data/cehrbert_data/patient_sequence"  # Not used when tokenized_fu
 cohort_folder: "data/omop_data/ad_cohort/finetune"
 dataset_prepared_path: "data/finetune_prepared"
 
-# Observation window: use 1 year of history before index_date
+# Observation window: use ALL available history before index_date
 # This is applied via extract_cohort_sequences when tokenized_full_dataset_path is set
-observation_window: 365
+observation_window: 36500  # all history (~100 yrs); paired with 4096-token context
 
 # Fraction of the fine-tuning cohort used for validation (the rest is training).
 # The held-out TEST set is a separate cohort created in step 6 and scored in step 9.
@@ -47,7 +47,8 @@ seed: 42
 
 # Model dimensions
 num_hidden_layers: 6
-max_position_embeddings: 512
+max_position_embeddings: 4096
+sample_packing_max_positions: 4096
 
 # Output and checkpointing
 output_dir: "data/finetune_results"

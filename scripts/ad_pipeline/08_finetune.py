@@ -20,10 +20,28 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from pipeline import launch, paths  # noqa: E402
-from pipeline.config_validation import add_finetune_config_checks, load_yaml  # noqa: E402
+from pipeline.config_validation import add_finetune_config_checks, load_yaml, write_config  # noqa: E402
 from pipeline.reporting import StepReport  # noqa: E402
 
 WRAPPER = Path(__file__).resolve().parent / "08_finetune.sh"
+
+ALL_HISTORY_DAYS = 36500  # sentinel look-back used when a negative window is requested
+
+
+def _apply_overrides(config: dict, max_position_embeddings: int | None, observation_window: int | None) -> None:
+    """Override token context and observation window in-place from CLI values.
+
+    ``max_position_embeddings`` also mirrors into ``sample_packing_max_positions`` when that
+    key is present. A negative ``observation_window`` is treated as the all-history sentinel
+    (``ALL_HISTORY_DAYS``). ``None`` for either preserves the YAML value.
+    """
+    if max_position_embeddings is not None:
+        config["max_position_embeddings"] = int(max_position_embeddings)
+        if "sample_packing_max_positions" in config:
+            config["sample_packing_max_positions"] = int(max_position_embeddings)
+    if observation_window is not None:
+        ow = int(observation_window)
+        config["observation_window"] = ALL_HISTORY_DAYS if ow < 0 else ow
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -31,6 +49,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--config", default=str(paths.FINETUNE_CONFIG))
     parser.add_argument("--skip-launch", action="store_true", help="Run preflight only; do not launch training")
     parser.add_argument("--report-dir", default=str(paths.report_dir_for("08_finetune")))
+    parser.add_argument(
+        "--max-position-embeddings", "--ctx", type=int, default=None, dest="max_position_embeddings",
+        help="Override the token context (max_position_embeddings / sample_packing_max_positions); "
+             "default uses the YAML value.")
+    parser.add_argument(
+        "--observation-window", type=int, default=None, dest="observation_window",
+        help="Override the look-back window in days; a negative value means all history. "
+             "Default uses the YAML value.")
     args = parser.parse_args(argv)
 
     report = StepReport("08_finetune", title="Step 8 — Fine-tune CEHR-BERT")
@@ -55,8 +81,18 @@ def main(argv: list[str] | None = None) -> int:
         report.note("Launch skipped (--skip-launch).")
         return _finalize(report, args.report_dir)
 
+    # CLI overrides: when provided, write an effective config and launch with that;
+    # otherwise launch with the original YAML unchanged (preserves current behavior).
+    launch_config_path = config_path
+    if args.max_position_embeddings is not None or args.observation_window is not None:
+        _apply_overrides(config, args.max_position_embeddings, args.observation_window)
+        report.add_metric("max_position_embeddings", config["max_position_embeddings"])
+        report.add_metric("observation_window", config.get("observation_window"))
+        launch_config_path = write_config(config, Path(args.report_dir) / "effective_finetune_config.yaml")
+        report.add_artifact(launch_config_path)
+
     # --- launch ------------------------------------------------------------
-    rc = launch.run_command(["bash", str(WRAPPER), str(config_path)], cwd=paths.PROJECT_ROOT)
+    rc = launch.run_command(["bash", str(WRAPPER), str(launch_config_path)], cwd=paths.PROJECT_ROOT)
     report.add_metric("launch_returncode", rc)
     if not report.add_check("fine-tuning process succeeded", rc == 0, detail=f"exit code {rc}"):
         return _finalize(report, args.report_dir)

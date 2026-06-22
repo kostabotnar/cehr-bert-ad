@@ -3,6 +3,14 @@
 All paths are derived from ``PROJECT_ROOT`` so the scripts work regardless of the
 current working directory. ``PROJECT_ROOT`` is the repository root
 (``.../cehr-bert``), two levels above ``scripts/ad_pipeline``.
+
+Evaluation outputs (steps 10 / 10a) are nested per experiment under
+``build/<run_label>/``, where the run label encodes the experiment parameters
+(look-back window in days and CEHR-BERT token cap). The label format is
+``w_<window>_ctx<ctx>`` (e.g. ``w_all_ctx4096``, ``w_365_ctx512``), with
+``window`` being ``"all"`` for an unbounded look-back. Use ``run_label`` to build
+the label and the label-aware ``*_dir`` functions below to resolve concrete
+output locations under a given experiment folder.
 """
 
 from __future__ import annotations
@@ -40,16 +48,57 @@ PREDICT_PREPARED_DIR = DATA_DIR / "predict_prepared"
 TEST_PREDICTIONS_DIR = FINETUNE_RESULTS_DIR / "test_predictions"
 VAL_PREDICTIONS_DIR = FINETUNE_RESULTS_DIR / "validation_predictions"
 
-# Evaluation outputs (steps 10 / 10a) all live under a single build/ folder.
+# Evaluation outputs (steps 10 / 10a) live under build/, nested per experiment in
+# build/<run_label>/ (see run_label / the label-aware *_dir functions below).
 BUILD_DIR = PROJECT_ROOT / "build"
-EVAL_RESULTS_DIR = BUILD_DIR
-FIGURES_DIR = BUILD_DIR / "figures"
-BUILD_REPORTS_DIR = BUILD_DIR / "reports"
+
+# Defaults for the experiment parameters that make up a run label.
+DEFAULT_WINDOW_DAYS = -1  # -1 or None => "all history" (unbounded look-back)
+DEFAULT_CTX = 4096
 
 
-def build_report_dir_for(step_name: str) -> Path:
-    """Report directory for a step under the build/ folder, e.g. build/reports/10_evaluate."""
-    return BUILD_REPORTS_DIR / step_name
+def run_label(window_days, ctx) -> str:
+    """Build a run label, e.g. ``'w_all_ctx4096'`` or ``'w_365_ctx512'``.
+
+    ``window_days`` of ``None`` or negative encodes an unbounded ("all") look-back.
+    """
+    w = "all" if window_days is None or int(window_days) < 0 else str(int(window_days))
+    return f"w_{w}_ctx{int(ctx)}"
+
+
+def run_dir(label: str) -> Path:
+    """Per-experiment output folder, e.g. ``build/w_all_ctx4096``."""
+    return BUILD_DIR / label
+
+
+def eval_results_dir(label: str) -> Path:
+    """Evaluation results folder for a run (metrics.json / stats json live here)."""
+    return run_dir(label)
+
+
+def figures_dir(label: str) -> Path:
+    """Figures folder for a run, e.g. ``build/w_all_ctx4096/figures``."""
+    return run_dir(label) / "figures"
+
+
+def build_reports_dir(label: str) -> Path:
+    """Reports folder for a run, e.g. ``build/w_all_ctx4096/reports``."""
+    return run_dir(label) / "reports"
+
+
+def build_report_dir_for(step_name: str, label: str) -> Path:
+    """Report directory for a step within a run, e.g. build/<label>/reports/10_evaluate."""
+    return build_reports_dir(label) / step_name
+
+
+def baselines_dir(label: str) -> Path:
+    """Baselines folder for a run, e.g. ``build/w_all_ctx4096/baselines``."""
+    return run_dir(label) / "baselines"
+
+
+def features_dir(label: str) -> Path:
+    """Baseline features folder for a run, e.g. ``build/w_all_ctx4096/baselines/features``."""
+    return baselines_dir(label) / "features"
 
 COHORT_DIR = OMOP_DIR / "ad_cohort"
 # The labeled cohort is split up front (step 6) into a fine-tuning set and a held-out
