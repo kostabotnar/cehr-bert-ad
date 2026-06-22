@@ -48,7 +48,6 @@ seed: 42
 # Model dimensions
 num_hidden_layers: 6
 max_position_embeddings: 4096
-sample_packing_max_positions: 4096
 
 # Output and checkpointing
 output_dir: "data/finetune_results"
