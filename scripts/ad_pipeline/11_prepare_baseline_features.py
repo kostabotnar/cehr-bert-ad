@@ -100,24 +100,31 @@ def main(argv: list[str] | None = None) -> int:
               for n, df in (("train", splits.train), ("val", splits.val), ("test", splits.test))}
     demo = {n: bl.build_demographics(df, data_dir)
             for n, df in (("train", splits.train), ("val", splits.val), ("test", splits.test))}
+    # confound-control utilization features: record length + visit count
+    visit = {n: bl.build_visit_features(df, data_dir, args.window_days)
+             for n, df in (("train", splits.train), ("val", splits.val), ("test", splits.test))}
 
     # --- fit vocabulary on TRAIN, assemble every split ---------------------
     spec = bl.fit_feature_spec(
         counts["train"], demo["train"], n_train=splits.train.height,
         min_prevalence=args.min_prevalence, window_days=args.window_days,
-        domain_encoding=bl.DOMAIN_ENCODING,
+        domain_encoding=bl.DOMAIN_ENCODING, visit_features=visit["train"],
     )
     report.add_metric("n_code_features", len(spec.code_features))
     report.add_metric("n_features_total", len(spec.feature_names))
     report.add_metric("n_gender_categories", len(spec.gender_categories))
     report.add_metric("n_race_categories", len(spec.race_categories))
+    report.add_metric("train_history_median", round(spec.history_median, 2))
+    report.add_metric("train_nvisits_median", round(spec.nvisits_median, 2))
     report.add_check("at least one code feature kept", len(spec.code_features) > 0,
                      detail=f"{len(spec.code_features)} concepts >= {args.min_prevalence:.1%} train prevalence")
     bl.save_feature_spec(out_dir, spec)
 
     cohorts = {"train": splits.train, "val": splits.val, "test": splits.test}
     for name in ("train", "val", "test"):
-        X, y, pids, idates = bl.assemble_matrix(cohorts[name], counts[name], demo[name], spec)
+        X, y, pids, idates = bl.assemble_matrix(
+            cohorts[name], counts[name], demo[name], spec, visit=visit[name]
+        )
         bl.save_split(out_dir, name, X, y, pids, idates)
         cells = X.shape[0] * X.shape[1]
         density = X.nnz / cells if cells else 0.0
