@@ -11,8 +11,12 @@ writes ranked tables:
                 (positive pushes the prediction toward the positive/AD class).
   * XGBoost  -- ``feature_importances_`` (the booster's importance, gain-based by default).
 
-OMOP code features (``cond:<id>`` / ``drug:<id>`` / ``proc:<id>``) are mapped to human-readable
-names via the tokenizer's ``concept_name_mapping.json`` when available.
+OMOP code features (``cond:<id>`` / ``drug:<id>`` / ``proc:<id>``) are mapped to a label via the
+OMOP CONCEPT table (``data/omop_data/concept/concept.parquet``, column ``concept_name``). NOTE:
+in this de-identified dataset ``concept_name`` is the *source vocabulary code* (e.g.
+``ICD-10-CM:M17.11``, ``CPT:93892``, or a bare RxNorm/NDC number for drugs), not free text.
+True descriptions require an external OMOP vocabulary (Athena) CONCEPT table -- supply one with
+``--concept-table`` and it is used verbatim.
 
 Outputs, under ``build/<label>/baselines/``:
   lr/feature_importance.csv        all features by |coefficient|
@@ -40,20 +44,33 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from pipeline import paths  # noqa: E402
 
 
-def _load_concept_names() -> dict[str, str]:
-    """Load concept_id -> name from the pretraining tokenizer dir, if present."""
-    path = paths.PRETRAIN_RESULTS_DIR / "concept_name_mapping.json"
-    if path.is_file():
-        return json.loads(path.read_text(encoding="utf-8"))
-    return {}
+# Standard OMOP gender concept ids (kept un-obfuscated in the demographic features).
+GENDER_LABELS = {"8507": "Male", "8532": "Female"}
+
+
+def _load_concept_names(concept_table: Path | None) -> dict[str, str]:
+    """Load ``concept_id -> concept_name`` from the OMOP CONCEPT parquet, if present.
+
+    ``concept_table`` overrides the default ``data/omop_data/concept/concept.parquet``. In the
+    de-identified dataset the name is the source vocabulary code; an external Athena CONCEPT
+    table here would supply real descriptions instead.
+    """
+    path = concept_table or (paths.OMOP_DIR / "concept" / "concept.parquet")
+    if not Path(path).exists():
+        return {}
+    df = pd.read_parquet(path, columns=["concept_id", "concept_name"])
+    return dict(zip(df["concept_id"].astype(str), df["concept_name"].astype(str)))
 
 
 def _readable(feature: str, names: dict[str, str]) -> str:
-    """Map a feature name (e.g. 'cond:10054') to a human-readable label."""
-    if ":" in feature:
-        prefix, _, concept_id = feature.partition(":")
-        if prefix in ("cond", "drug", "proc") and concept_id in names:
-            return f"{prefix}: {names[concept_id]}"
+    """Map a feature name (e.g. 'cond:10054') to a label via the CONCEPT table."""
+    if ":" not in feature:
+        return feature
+    prefix, _, concept_id = feature.partition(":")
+    if prefix in ("cond", "drug", "proc") and concept_id in names:
+        return f"{prefix}: {names[concept_id]}"
+    if prefix == "gender":
+        return f"gender: {GENDER_LABELS.get(concept_id, concept_id)}"
     return feature
 
 
@@ -62,7 +79,7 @@ def _rank_lr(model_dir: Path, feature_names: list[str], names: dict[str, str]) -
     coef = np.asarray(pipeline.named_steps["clf"].coef_).ravel()
     df = pd.DataFrame({
         "feature": feature_names,
-        "concept_name": [_readable(f, names) for f in feature_names],
+        "label": [_readable(f, names) for f in feature_names],
         "coefficient": coef,
         "abs_coefficient": np.abs(coef),
     })
@@ -74,7 +91,7 @@ def _rank_xgb(model_dir: Path, feature_names: list[str], names: dict[str, str]) 
     importance = np.asarray(model.feature_importances_).ravel()
     df = pd.DataFrame({
         "feature": feature_names,
-        "concept_name": [_readable(f, names) for f in feature_names],
+        "label": [_readable(f, names) for f in feature_names],
         "importance": importance,
     })
     return df.sort_values("importance", ascending=False).reset_index(drop=True)
@@ -87,6 +104,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--baselines-dir", default=None,
                         help="Override the baselines folder (default: per-run baselines_dir)")
     parser.add_argument("--top", type=int, default=25, help="Rows to print to stdout per model")
+    parser.add_argument("--concept-table", default=None,
+                        help="Path to an OMOP CONCEPT parquet (concept_id, concept_name). "
+                             "Default: data/omop_data/concept/concept.parquet. Supply an Athena "
+                             "vocabulary table here for true descriptions.")
     args = parser.parse_args(argv)
 
     label = paths.run_label(args.window_days, args.ctx)
@@ -100,9 +121,10 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     feature_names = json.loads(feature_names_path.read_text(encoding="utf-8"))
-    names = _load_concept_names()
-    print(f"Run label: {label}  |  {len(feature_names)} features  |  "
-          f"concept names: {'yes' if names else 'unavailable'}\n")
+    concept_table = Path(args.concept_table) if args.concept_table else None
+    names = _load_concept_names(concept_table)
+    print(f"Baselines: {baselines_dir}  |  {len(feature_names)} features  |  "
+          f"CONCEPT table: {'yes (' + str(len(names)) + ' codes)' if names else 'unavailable'}\n")
 
     for model_name, ranker in (("lr", _rank_lr), ("xgboost", _rank_xgb)):
         model_dir = baselines_dir / model_name
@@ -115,7 +137,7 @@ def main(argv: list[str] | None = None) -> int:
         score_col = "coefficient" if model_name == "lr" else "importance"
         print(f"=== {model_name.upper()} top {args.top} (by "
               f"{'|coefficient|' if model_name == 'lr' else 'importance'}) ===")
-        cols = ["concept_name", score_col]
+        cols = ["feature", "label", score_col]
         print(df.head(args.top)[cols].to_string(index=False))
         print(f"-> full ranking written to {out_path}\n")
 
