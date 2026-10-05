@@ -122,7 +122,12 @@ def load_and_create_model(
         model = load_and_create_model(model_args, tokenizer)
     """
     try:
-        model_config = CehrBertConfig.from_pretrained(os.path.expanduser(model_args.model_name_or_path))
+        model_path = os.path.expanduser(model_args.model_name_or_path)
+        # transformers returns a default config for an existing directory without config.json,
+        # so a fresh run must be routed to the fallback explicitly.
+        if os.path.isdir(model_path) and not os.path.isfile(os.path.join(model_path, "config.json")):
+            raise FileNotFoundError(f"No config.json found in {model_path}")
+        model_config = CehrBertConfig.from_pretrained(model_path)
     except (OSError, ValueError, FileNotFoundError, json.JSONDecodeError) as e:
         LOG.warning(e)
         model_config = CehrBertConfig(
