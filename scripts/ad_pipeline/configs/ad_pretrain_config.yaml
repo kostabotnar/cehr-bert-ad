@@ -47,6 +47,11 @@ num_train_epochs: 10
 warmup_steps: 1000
 weight_decay: 0.01
 
+# bf16 roughly halves step time on the GB10; workers move batch collation (~110 ms per
+# batch of 32 in one process) off the training loop.
+bf16: true
+dataloader_num_workers: 4
+
 # Logging
 logging_steps: 100
 save_total_limit: 3
