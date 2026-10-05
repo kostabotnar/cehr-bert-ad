@@ -1,10 +1,11 @@
+from __future__ import annotations
+
 import collections
 import functools
 import os
 from datetime import datetime
-from typing import Dict, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Dict, List, Optional, Tuple, Union
 
-import meds_reader
 import numpy as np
 import pandas as pd
 from datasets import Dataset, DatasetDict, Features, Sequence, Split, Value
@@ -25,6 +26,9 @@ MEDS_SPLIT_DATA_SPLIT_MAPPING = {
     "held_out": Split.TEST,
 }
 NON_ALPHANUMERIC_CHARS = r"[\w\/\\:\-_]"
+if TYPE_CHECKING:
+    import meds_reader
+
 LOG = logging.get_logger("transformers")
 
 
@@ -41,7 +45,16 @@ def get_meds_to_cehrbert_conversion_cls(
     raise RuntimeError(f"{meds_to_cehrbert_conversion_type} is not a valid MedsToCehrBertConversionType")
 
 
+def _import_meds_reader():
+    try:
+        import meds_reader
+    except ImportError as e:
+        raise ImportError("meds_reader is required for MEDS input (is_data_in_meds: true) but is not installed.") from e
+    return meds_reader
+
+
 def get_subject_split(meds_reader_db_path: str) -> Dict[str, List[int]]:
+    meds_reader = _import_meds_reader()
     subject_split = pd.read_parquet(os.path.join(meds_reader_db_path, "metadata/subject_splits.parquet"))
     with meds_reader.SubjectDatabase(meds_reader_db_path) as patient_database:
         subject_ids = [p for p in patient_database]
@@ -184,6 +197,7 @@ def create_dataset_from_meds_reader(
     cache_file_collector: Optional[CacheFileCollector] = None,
 ) -> DatasetDict:
 
+    _import_meds_reader()
     LOG.info("The meds_to_cehrbert_conversion_type: %s", data_args.meds_to_cehrbert_conversion_type)
     LOG.info("The att_function_type: %s", data_args.att_function_type)
     LOG.info("The inpatient_att_function_type: %s", data_args.inpatient_att_function_type)
@@ -230,6 +244,7 @@ def _meds_to_cehrbert_generator(
         meds_exclude_tables=meds_exclude_tables,
         disconnect_problem_list_events=disconnect_problem_list_events,
     )
+    meds_reader = _import_meds_reader()
     with meds_reader.SubjectDatabase(path_to_db) as patient_database:
         for shard in shards:
             for patient_id, prediction_time, observation_window, label in shard:

@@ -1,10 +1,11 @@
+from __future__ import annotations
+
 import re
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Iterable, List, Optional, Tuple
+from typing import TYPE_CHECKING, Iterable, List, Optional, Tuple
 
-import meds_reader
 from meds.schema import birth_code
 from transformers import logging
 
@@ -19,6 +20,9 @@ from cehrbert.data_generators.hf_data_generator.meds_to_cehrbert_conversion_rule
     MedsToCehrbertOMOP,
 )
 from cehrbert.med_extension.schema_extension import Event
+
+if TYPE_CHECKING:
+    import meds_reader
 
 LOG = logging.get_logger("transformers")
 
