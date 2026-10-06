@@ -249,3 +249,54 @@ def test_bootstrap_ci_all_single_class_returns_nan_ci():
         y_true, y_prob, lambda t, p: float(np.mean(p)), n_resamples=50, seed=0
     )
     assert np.isnan(lo) and np.isnan(hi)
+
+
+# --------------------------------------------------------------------------
+# paired bootstrap
+# --------------------------------------------------------------------------
+def _frame(ids, y, p):
+    return pd.DataFrame({"subject_id": ids, "y_true": y, "y_prob": p})
+
+
+def _paired_data(n=300, seed=0):
+    rng = np.random.default_rng(seed)
+    y = rng.integers(0, 2, size=n)
+    good = np.clip(0.5 * y + rng.normal(0.25, 0.2, size=n), 0.001, 0.999)
+    noise = rng.uniform(0.001, 0.999, size=n)
+    return np.arange(n), y, good, noise
+
+
+def test_paired_bootstrap_identical_predictions_zero_width():
+    ids, y, good, _ = _paired_data()
+    res = ev.paired_bootstrap_differences(_frame(ids, y, good), _frame(ids, y, good), n_resamples=50)
+    for metric in ("auroc", "auprc"):
+        assert res[metric]["diff"] == 0.0
+        assert res[metric]["ci_low"] == 0.0
+        assert res[metric]["ci_high"] == 0.0
+
+
+def test_paired_bootstrap_better_model_excludes_zero_and_ignores_row_order():
+    ids, y, good, noise = _paired_data()
+    perm = np.random.default_rng(1).permutation(len(ids))
+    res = ev.paired_bootstrap_differences(
+        _frame(ids, y, good), _frame(ids[perm], y[perm], noise[perm]), n_resamples=200
+    )
+    for metric in ("auroc", "auprc"):
+        assert res[metric]["diff"] > 0
+        assert res[metric]["ci_low"] > 0
+
+
+def test_paired_bootstrap_rejects_misaligned_inputs():
+    ids, y, good, noise = _paired_data(n=50)
+    with pytest.raises(ValueError, match="same set"):
+        ev.paired_bootstrap_differences(_frame(ids, y, good), _frame(ids[:-1], y[:-1], noise[:-1]), n_resamples=5)
+    with pytest.raises(ValueError, match="same set"):
+        ev.paired_bootstrap_differences(_frame(ids, y, good), _frame(ids + 1, y, noise), n_resamples=5)
+    flipped = y.copy()
+    flipped[0] = 1 - flipped[0]
+    with pytest.raises(ValueError, match="labels"):
+        ev.paired_bootstrap_differences(_frame(ids, y, good), _frame(ids, flipped, noise), n_resamples=5)
+    dup_ids = ids.copy()
+    dup_ids[1] = dup_ids[0]
+    with pytest.raises(ValueError, match="duplicated"):
+        ev.paired_bootstrap_differences(_frame(dup_ids, y, good), _frame(ids, y, noise), n_resamples=5)
