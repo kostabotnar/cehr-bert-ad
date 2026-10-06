@@ -294,6 +294,7 @@ def main():
         ),
         is_pretraining=False,
         mlm_probability=config.mlm_probability,
+        keep_demographic_prompt=bool(data_args.keep_demographic_prompt),
     )
 
     if training_args.do_train:

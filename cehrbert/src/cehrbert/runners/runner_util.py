@@ -198,6 +198,9 @@ def generate_prepared_ds_path(data_args, model_args, data_folder=None) -> Path:
         + "|"
         + f"chronological_split={str(data_args.chronological_split)}"
     )
+    # Only added when set so hashes of existing prepared datasets stay unchanged.
+    if getattr(data_args, "keep_demographic_prompt", False):
+        concatenated_str += "|keep_demographic_prompt=True"
     basename = os.path.basename(remove_trailing_slashes(data_folder))
     cleaned_basename = re.sub(r"[^a-zA-Z0-9_]", "", basename)
     LOG.info(f"concatenated_str: {concatenated_str}")

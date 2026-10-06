@@ -701,14 +701,32 @@ class HFTokenizationMapping(DatasetMapping):
         return record
 
 
+# Sequences generated with --gpt_patient_sequence start with year, age, gender and race tokens.
+# They carry age -1 and the epoch time of the first visit.
+DEMOGRAPHIC_PROMPT_LENGTH = 4
+
+
+def has_demographic_prompt(concept_ids) -> bool:
+    """True when the sequence starts with the [year:, age:, gender, race] prompt tokens."""
+    return (
+        len(concept_ids) >= DEMOGRAPHIC_PROMPT_LENGTH
+        and str(concept_ids[0]).startswith("year:")
+        and str(concept_ids[1]).startswith("age:")
+    )
+
+
 class ExtractTokenizedSequenceDataMapping:
     def __init__(
         self,
         person_index_date_map: Dict[int, List[Dict[str, Any]]],
         observation_window: int = 0,
+        keep_demographic_prompt: bool = False,
     ):
         self.person_index_date_map = person_index_date_map
         self.observation_window = observation_window
+        # Keep the leading demographic prompt tokens whatever the window. The first visit is
+        # usually far outside the window, so these tokens would otherwise be dropped.
+        self.keep_demographic_prompt = keep_demographic_prompt
 
     def _calculate_prediction_start_time(self, prediction_time: float):
         if self.observation_window and self.observation_window > 0:
@@ -749,6 +767,12 @@ class ExtractTokenizedSequenceDataMapping:
             else:
                 static_inputs[k] = v
 
+        prompt_length = (
+            DEMOGRAPHIC_PROMPT_LENGTH
+            if self.keep_demographic_prompt and has_demographic_prompt(record["concept_ids"])
+            else 0
+        )
+
         batched_samples = defaultdict(list)
         for (_, index_date, label), observation_window_index in zip(
             prediction_start_end_times, observation_window_indices
@@ -762,10 +786,18 @@ class ExtractTokenizedSequenceDataMapping:
             except Exception:
                 start_age = -1
             batched_samples["age_at_index"].append(start_age)
+            selected = observation_window_index
+            if prompt_length:
+                # The prompt is dated at the first visit. Never keep it when that is after the window
+                # end (the in-window part is then empty too), so it cannot carry post-index information.
+                keep_prompt = bool(np.max(np.asarray(record["epoch_times"])[:prompt_length]) <= index_date)
+                in_window = observation_window_index.copy()
+                in_window[:prompt_length] = False
+                selected = np.concatenate(
+                    [np.arange(prompt_length if keep_prompt else 0), np.flatnonzero(in_window)]
+                ).astype(np.int64)
             for time_series_column in time_series_columns:
-                batched_samples[time_series_column].append(
-                    np.asarray(record[time_series_column])[observation_window_index]
-                )
+                batched_samples[time_series_column].append(np.asarray(record[time_series_column])[selected])
         return batched_samples
 
     def batch_transform(self, record: Dict[str, Any]) -> Dict[str, Any]:

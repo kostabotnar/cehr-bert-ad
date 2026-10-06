@@ -161,7 +161,11 @@ def extract_cohort_sequences(
             f"The list contains: {missing_person_ids}"
         )
     processed_dataset = filtered_tokenized_dataset.map(
-        ExtractTokenizedSequenceDataMapping(person_index_date_map, data_args.observation_window).batch_transform,
+        ExtractTokenizedSequenceDataMapping(
+            person_index_date_map,
+            data_args.observation_window,
+            keep_demographic_prompt=bool(data_args.keep_demographic_prompt),
+        ).batch_transform,
         batched=True,
         batch_size=data_args.preprocessing_batch_size,
         num_proc=data_args.preprocessing_num_workers,
