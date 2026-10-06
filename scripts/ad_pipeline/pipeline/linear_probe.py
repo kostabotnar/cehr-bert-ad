@@ -146,6 +146,30 @@ def _batches(dataset, batch_size: int) -> Iterable[list[dict]]:
         yield [{k: chunk[k][i] for k in keys} for i in range(n)]
 
 
+def cls_only_batch(n: int, cls_token_index: int) -> dict[str, torch.Tensor]:
+    """Batch of ``n`` sequences holding only [CLS], with the dtypes and CLS values the collator uses."""
+    return {
+        "input_ids": torch.full((n, 1), cls_token_index, dtype=torch.long),
+        "attention_mask": torch.ones((n, 1), dtype=torch.float32),
+        "ages": torch.zeros((n, 1), dtype=torch.long),
+        "dates": torch.zeros((n, 1), dtype=torch.long),
+        "visit_concept_orders": torch.zeros((n, 1), dtype=torch.long),
+        "concept_values": torch.full((n, 1), -1.0, dtype=torch.float32),
+        "concept_value_masks": torch.zeros((n, 1), dtype=torch.float32),
+        "visit_segments": torch.zeros((n, 1), dtype=torch.long),
+    }
+
+
+def _encode(model, batch, cls_token_index: int, device: str, amp_dtype) -> tuple[np.ndarray, np.ndarray]:
+    batch = {k: v.to(device) for k, v in batch.items()}
+    use_amp = amp_dtype is not None and torch.device(device).type == "cuda"
+    ctx = torch.autocast(device_type="cuda", dtype=amp_dtype) if use_amp else nullcontext()
+    with ctx:
+        hidden = model.bert(**batch).last_hidden_state
+    cls, mean = pool_features(hidden, batch["attention_mask"], batch["input_ids"], cls_token_index)
+    return cls.cpu().numpy().astype(np.float32), mean.cpu().numpy().astype(np.float32)
+
+
 @torch.no_grad()
 def extract_features(
     model,
@@ -170,29 +194,36 @@ def extract_features(
     model.eval()
     cls_parts, mean_parts = [], []
     person_ids, labels, n_tokens = [], [], []
+    hidden_size = model.config.hidden_size
     done = 0
     n_batches = 0
     for records in _batches(dataset, batch_size):
         person_ids.extend(int(r["person_id"]) for r in records)
         labels.extend(int(r["classifier_label"]) for r in records)
         n_tokens.extend(len(r["input_ids"]) for r in records)
-        batch = collator(records)
-        for col in NON_MODEL_COLUMNS:
-            batch.pop(col, None)
-        batch = {k: v.to(device) for k, v in batch.items()}
-        use_amp = amp_dtype is not None and torch.device(device).type == "cuda"
-        ctx = torch.autocast(device_type="cuda", dtype=amp_dtype) if use_amp else nullcontext()
-        with ctx:
-            hidden = model.bert(**batch).last_hidden_state
-        cls, mean = pool_features(hidden, batch["attention_mask"], batch["input_ids"], tokenizer.cls_token_index)
-        cls_parts.append(cls.cpu().numpy().astype(np.float32))
-        mean_parts.append(mean.cpu().numpy().astype(np.float32))
+        # Rows with no in-window events never reach the collator: torch.tensor([]) is float32, which
+        # makes the whole padded batch's input_ids float (and an all-empty batch has no CLS column).
+        # They are encoded as a CLS-only sequence instead.
+        nonempty = [i for i, r in enumerate(records) if len(r["input_ids"]) > 0]
+        empty = [i for i, r in enumerate(records) if len(r["input_ids"]) == 0]
+        cls = np.zeros((len(records), hidden_size), dtype=np.float32)
+        mean = np.zeros((len(records), hidden_size), dtype=np.float32)
+        cls_idx = tokenizer.cls_token_index
+        if nonempty:
+            batch = collator([records[i] for i in nonempty])
+            for col in NON_MODEL_COLUMNS:
+                batch.pop(col, None)
+            cls[nonempty], mean[nonempty] = _encode(model, batch, cls_idx, device, amp_dtype)
+        if empty:
+            batch = cls_only_batch(len(empty), cls_idx)
+            cls[empty], mean[empty] = _encode(model, batch, cls_idx, device, amp_dtype)
+        cls_parts.append(cls)
+        mean_parts.append(mean)
         done += len(records)
         n_batches += 1
         if progress_every and n_batches % progress_every == 0:
             print(f"  {done} rows", flush=True)
 
-    hidden_size = model.config.hidden_size
     n_tokens_arr = np.asarray(n_tokens, dtype=np.int64)
     return ExtractedFeatures(
         cls=np.concatenate(cls_parts) if cls_parts else np.zeros((0, hidden_size), dtype=np.float32),

@@ -121,6 +121,41 @@ def test_truncation_bookkeeping():
     assert feats.label.tolist() == [0, 1, 0, 1]
 
 
+def test_empty_windows_keep_their_rows_and_do_not_break_batches():
+    """Regression: an empty record made torch.tensor([]) float32 and the batch's input_ids float."""
+    model, tokenizer = make_model(), make_tokenizer()
+    lengths = [0, 7, 0, 12, 9, 0]
+    ds = make_dataset(lengths)
+    kwargs = dict(max_length=16, device="cpu", amp_dtype=None)
+    mixed = lp.extract_features(model, ds, tokenizer, batch_size=6, **kwargs)
+    one = lp.extract_features(model, ds, tokenizer, batch_size=1, **kwargs)
+    all_empty = lp.extract_features(model, make_dataset([0, 0]), tokenizer, batch_size=2, **kwargs)
+
+    np.testing.assert_array_equal(mixed.person_id, np.arange(1000, 1006))
+    assert mixed.n_tokens_before_truncation.tolist() == lengths
+    assert mixed.truncated.tolist() == [False] * 6
+    for kind in lp.FEATURE_KINDS:
+        got = getattr(mixed, kind)
+        assert got.shape == (6, HIDDEN) and np.isfinite(got).all()
+        np.testing.assert_allclose(got, getattr(one, kind), atol=1e-5, rtol=1e-4)
+        np.testing.assert_allclose(got[0], got[2], atol=1e-6)
+        np.testing.assert_allclose(getattr(all_empty, kind)[0], got[0], atol=1e-5)
+    # A CLS-only sequence has one real position, so the mean equals the CLS state.
+    np.testing.assert_allclose(mixed.cls[0], mixed.mean[0], atol=1e-6)
+
+
+def test_cls_only_batch_matches_collator_dtypes():
+    from cehrbert.data_generators.hf_data_generator.hf_dataset_collator import CehrBertDataCollator
+
+    tokenizer = make_tokenizer()
+    collator = CehrBertDataCollator(tokenizer, max_length=16, is_pretraining=False)
+    real = collator([make_record(np.random.default_rng(0), 1, 6)])
+    synth = lp.cls_only_batch(2, tokenizer.cls_token_index)
+    for key, tensor in synth.items():
+        assert tensor.dtype == real[key].dtype, key
+    assert synth["input_ids"].tolist() == [[tokenizer.cls_token_index]] * 2
+
+
 def test_mean_pooling_ignores_padding():
     hidden = torch.randn(2, 5, 4)
     mask = torch.tensor([[1, 1, 1, 0, 0], [1, 1, 1, 1, 1]], dtype=torch.float)
