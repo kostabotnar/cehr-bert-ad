@@ -53,8 +53,10 @@ VAL_PREDICTIONS_DIR = FINETUNE_RESULTS_DIR / "validation_predictions"
 BUILD_DIR = PROJECT_ROOT / "build"
 
 # Defaults for the experiment parameters that make up a run label.
-DEFAULT_WINDOW_DAYS = -1  # -1 or None => "all history" (unbounded look-back)
-DEFAULT_CTX = 4096
+# These match ad_finetune_config.yaml (observation_window) and the pretrained model's
+# max_position_embeddings, so the default label is "w_365_ctx512".
+DEFAULT_WINDOW_DAYS = 365
+DEFAULT_CTX = 512
 
 
 def run_label(window_days, ctx) -> str:
@@ -67,7 +69,7 @@ def run_label(window_days, ctx) -> str:
 
 
 def run_dir(label: str) -> Path:
-    """Per-experiment output folder, e.g. ``build/w_all_ctx4096``."""
+    """Per-experiment output folder, e.g. ``build/w_365_ctx512``."""
     return BUILD_DIR / label
 
 
@@ -77,12 +79,12 @@ def eval_results_dir(label: str) -> Path:
 
 
 def figures_dir(label: str) -> Path:
-    """Figures folder for a run, e.g. ``build/w_all_ctx4096/figures``."""
+    """Figures folder for a run, e.g. ``build/w_365_ctx512/figures``."""
     return run_dir(label) / "figures"
 
 
 def build_reports_dir(label: str) -> Path:
-    """Reports folder for a run, e.g. ``build/w_all_ctx4096/reports``."""
+    """Reports folder for a run, e.g. ``build/w_365_ctx512/reports``."""
     return run_dir(label) / "reports"
 
 
@@ -92,12 +94,12 @@ def build_report_dir_for(step_name: str, label: str) -> Path:
 
 
 def baselines_dir(label: str) -> Path:
-    """Baselines folder for a run, e.g. ``build/w_all_ctx4096/baselines``."""
+    """Baselines folder for a run, e.g. ``build/w_365_ctx512/baselines``."""
     return run_dir(label) / "baselines"
 
 
 def features_dir(label: str) -> Path:
-    """Baseline features folder for a run, e.g. ``build/w_all_ctx4096/baselines/features``."""
+    """Baseline features folder for a run, e.g. ``build/w_365_ctx512/baselines/features``."""
     return baselines_dir(label) / "features"
 
 COHORT_DIR = OMOP_DIR / "ad_cohort"
