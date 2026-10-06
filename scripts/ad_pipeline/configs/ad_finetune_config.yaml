@@ -19,6 +19,10 @@ dataset_prepared_path: "data/finetune_prepared"
 # This is applied via extract_cohort_sequences when tokenized_full_dataset_path is set
 observation_window: 365
 
+# Always keep the four demographic prompt tokens (year, age, gender, race) of each sequence,
+# whatever the window, and keep them when the collator truncates to max_position_embeddings.
+keep_demographic_prompt: true
+
 # Fraction of the fine-tuning cohort used for validation (the rest is training).
 # The held-out TEST set is a separate cohort created in step 6 and scored in step 9.
 validation_split_percentage: 0.1

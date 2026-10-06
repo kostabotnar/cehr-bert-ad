@@ -88,9 +88,30 @@ def make_record(rng: np.random.Generator, person_id: int, n_tokens: int, label: 
     }
 
 
-def make_dataset(lengths, seed: int = 1):
+def add_prompt(record: dict) -> dict:
+    """Prepend the four demographic prompt tokens (age -1) as extract_cohort_sequences keeps them."""
+    n_events = len(record["input_ids"])
+    out = dict(record)
+    out["input_ids"] = [VOCAB["100"], VOCAB["101"], VOCAB["102"], VOCAB["103"]] + record["input_ids"]
+    out["concept_ids"] = ["year:2015", "age:76", "8507", "8516"] + ["c"] * n_events
+    out["ages"] = [-1] * 4 + record["ages"]
+    out["dates"] = [0] * 4 + record["dates"]
+    out["visit_concept_orders"] = [0] * 4 + record["visit_concept_orders"]
+    out["concept_values"] = [0.0] * 4 + record["concept_values"]
+    out["concept_value_masks"] = [0] * 4 + record["concept_value_masks"]
+    out["visit_segments"] = [0] * 4 + record["visit_segments"]
+    return out
+
+
+def make_dataset(lengths, seed: int = 1, prompt: bool = False):
+    """Records with ``lengths`` event tokens; with ``prompt`` four prompt tokens are added in front."""
     rng = np.random.default_rng(seed)
     records = [make_record(rng, 1000 + i, n, label=i % 2) for i, n in enumerate(lengths)]
+    if prompt:
+        records = [add_prompt(r) for r in records]
+    else:
+        for r in records:
+            r["concept_ids"] = ["c"] * len(r["input_ids"])
     return datasets.Dataset.from_list(records)
 
 
@@ -142,6 +163,65 @@ def test_empty_windows_keep_their_rows_and_do_not_break_batches():
         np.testing.assert_allclose(getattr(all_empty, kind)[0], got[0], atol=1e-5)
     # A CLS-only sequence has one real position, so the mean equals the CLS state.
     np.testing.assert_allclose(mixed.cls[0], mixed.mean[0], atol=1e-6)
+
+
+def test_prompt_survives_truncation_and_is_not_counted_as_events():
+    model, tokenizer = make_model(), make_tokenizer()
+    ds = make_dataset([5, 40], prompt=True)
+    kwargs = dict(max_length=16, device="cpu", amp_dtype=None)
+    feats = lp.extract_features(model, ds, tokenizer, batch_size=2, keep_demographic_prompt=True, **kwargs)
+    assert feats.n_tokens_before_truncation.tolist() == [9, 44]
+    assert feats.n_event_tokens.tolist() == [5, 40]
+    assert feats.truncated.tolist() == [False, True]
+    assert feats.demographic_prompt_in_input.tolist() == [True, True]
+
+    plain = lp.extract_features(model, ds, tokenizer, batch_size=2, **kwargs)
+    assert plain.demographic_prompt_in_input.tolist() == [False, False]
+    assert plain.n_event_tokens.tolist() == plain.n_tokens_before_truncation.tolist()
+    # Without the option the collator drops the prompt of the long record.
+    assert not np.allclose(plain.cls[1], feats.cls[1])
+
+
+def test_prompt_only_rows_are_empty_windows_but_go_through_the_collator():
+    model, tokenizer = make_model(), make_tokenizer()
+    ds = make_dataset([0, 7, 0, 12], prompt=True)
+    kwargs = dict(max_length=16, device="cpu", amp_dtype=None, keep_demographic_prompt=True)
+    feats = lp.extract_features(model, ds, tokenizer, batch_size=4, **kwargs)
+    assert feats.n_event_tokens.tolist() == [0, 7, 0, 12]
+    assert feats.n_tokens_before_truncation.tolist() == [4, 11, 4, 16]
+    assert feats.demographic_prompt_in_input.all()
+    # CLS plus four prompt tokens is not the CLS-only encoding.
+    cls_only = lp.extract_features(model, make_dataset([0]), tokenizer, batch_size=1, **kwargs)
+    assert not np.allclose(feats.cls[0], cls_only.cls[0])
+    np.testing.assert_allclose(feats.cls[0], feats.cls[2], atol=1e-6)
+
+
+def test_prompt_features_do_not_depend_on_batch_size():
+    model, tokenizer = make_model(), make_tokenizer()
+    ds = make_dataset([0, 9, 14, 20, 30, 0, 5], prompt=True)
+    kwargs = dict(max_length=16, device="cpu", amp_dtype=None, keep_demographic_prompt=True)
+    one = lp.extract_features(model, ds, tokenizer, batch_size=1, **kwargs)
+    four = lp.extract_features(model, ds, tokenizer, batch_size=4, **kwargs)
+    for kind in lp.FEATURE_KINDS:
+        np.testing.assert_allclose(getattr(one, kind), getattr(four, kind), atol=1e-5, rtol=1e-4)
+    np.testing.assert_array_equal(one.demographic_prompt_in_input, four.demographic_prompt_in_input)
+
+
+def test_mixed_batch_with_truly_empty_rows_and_prompts():
+    """A row without any token (prompt dropped, no events) still uses the CLS-only path."""
+    model, tokenizer = make_model(), make_tokenizer()
+    rng = np.random.default_rng(1)
+    with_prompt = add_prompt(make_record(rng, 1, 6))
+    empty = make_record(rng, 2, 0)
+    empty["concept_ids"] = []
+    ds = datasets.Dataset.from_list([with_prompt, empty])
+    feats = lp.extract_features(
+        model, ds, tokenizer, max_length=16, batch_size=2, device="cpu", amp_dtype=None, keep_demographic_prompt=True
+    )
+    assert feats.n_tokens_before_truncation.tolist() == [10, 0]
+    assert feats.n_event_tokens.tolist() == [6, 0]
+    assert feats.demographic_prompt_in_input.tolist() == [True, False]
+    assert np.isfinite(feats.cls).all()
 
 
 def test_cls_only_batch_matches_collator_dtypes():
@@ -200,30 +280,44 @@ def test_load_frozen_model_uses_sdpa_and_eval(tmp_path):
 EVENT_OFFSET_DAYS = [0, 1, 50, 365, 366, 500]
 
 
-def _tokenized_dataset_dict(people: dict[int, dt.date]):
+def _tokenized_dataset_dict(people: dict[int, dt.date], prompt_offset_days=None, offsets_by_person=None):
+    """Synthetic tokenized dataset; with ``prompt_offset_days`` each sequence starts with the four
+    demographic prompt tokens dated that many days before the index date (age -1)."""
     rng = np.random.default_rng(3)
     rows = []
     for pid, index_date in people.items():
         index_ts = dt.datetime(index_date.year, index_date.month, index_date.day, tzinfo=dt.timezone.utc).timestamp()
-        offsets = sorted(EVENT_OFFSET_DAYS, reverse=True)
+        offsets = sorted((offsets_by_person or {}).get(pid, EVENT_OFFSET_DAYS), reverse=True)
         epoch = [index_ts - d * 86400 for d in offsets]
         n = len(epoch)
         orders = list(range(1, n + 1))
-        rows.append(
-            {
-                "person_id": pid,
-                # concept_ids carries the offset so the test can see which events survived.
-                "concept_ids": [str(d) for d in offsets],
-                "input_ids": rng.integers(len(SPECIAL), len(VOCAB), size=n).tolist(),
-                "epoch_times": epoch,
-                "ages": [50 + o for o in orders],
-                "dates": [100 * o for o in orders],
-                "visit_concept_orders": orders,
-                "concept_values": [0.0] * n,
-                "concept_value_masks": [0] * n,
-                "visit_segments": [1] * n,
+        row = {
+            "person_id": pid,
+            # concept_ids carries the offset so the test can see which events survived.
+            "concept_ids": [str(d) for d in offsets],
+            "input_ids": rng.integers(len(SPECIAL), len(VOCAB), size=n).tolist(),
+            "epoch_times": epoch,
+            "ages": [50 + o for o in orders],
+            "dates": [100 * o for o in orders],
+            "visit_concept_orders": orders,
+            "concept_values": [0.0] * n,
+            "concept_value_masks": [0] * n,
+            "visit_segments": [1] * n,
+        }
+        if prompt_offset_days is not None:
+            prompt = {
+                "concept_ids": ["year:2015", "age:76", "8507", "8516"],
+                "input_ids": [VOCAB["100"], VOCAB["101"], VOCAB["102"], VOCAB["103"]],
+                "epoch_times": [index_ts - prompt_offset_days * 86400] * 4,
+                "ages": [-1] * 4,
+                "dates": [0] * 4,
+                "visit_concept_orders": [0] * 4,
+                "concept_values": [0.0] * 4,
+                "concept_value_masks": [0] * 4,
+                "visit_segments": [0] * 4,
             }
-        )
+            row.update({k: prompt[k] + row[k] for k in prompt})
+        rows.append(row)
     half = len(rows) // 2
     return datasets.DatasetDict(
         {"train": datasets.Dataset.from_list(rows[:half]), "validation": datasets.Dataset.from_list(rows[half:])}
@@ -318,7 +412,17 @@ def test_step15_end_to_end(step, tmp_path):
     for split, pids in {"train": [1, 2], "val": [3, 4], "test": [5, 6]}.items():
         meta = pd.read_parquet(out / split / "meta.parquet")
         assert sorted(meta["person_id"]) == pids
-        assert list(meta.columns) == ["person_id", "index_date", "label", "n_tokens_before_truncation", "truncated"]
+        assert list(meta.columns) == [
+            "person_id",
+            "index_date",
+            "label",
+            "n_tokens_before_truncation",
+            "truncated",
+            "n_event_tokens",
+            "demographic_prompt_in_input",
+        ]
+        assert meta["n_event_tokens"].tolist() == [3, 3]
+        assert not meta["demographic_prompt_in_input"].any()
         # Events at 1, 50 and 365 days before the index date are in the window; day 0 and 366 are not.
         assert meta["n_tokens_before_truncation"].tolist() == [3, 3]
         assert not meta["truncated"].any()
@@ -327,6 +431,102 @@ def test_step15_end_to_end(step, tmp_path):
             X = np.load(out / split / f"features_{kind}.npy")
             assert X.shape == (2, HIDDEN) and X.dtype == np.float32
     assert not (out / "_work").exists()
+
+
+def _run_step15_with_prompt(step, tmp_path, offsets_by_person, ctx, batch_size, keep=True):
+    index = dt.date(2020, 1, 1)
+    splits = pl.DataFrame(
+        {
+            "person_id": [1, 2, 3, 4, 5, 6],
+            "index_date": [index] * 6,
+            "label": [0, 1, 0, 1, 0, 1],
+            "split": ["train", "train", "val", "val", "test", "test"],
+        },
+        schema={"person_id": pl.Int64, "index_date": pl.Date, "label": pl.Int64, "split": pl.Utf8},
+    )
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    splits_file = tmp_path / "splits.parquet"
+    splits.write_parquet(splits_file)
+    tokenized = tmp_path / "pretrain_prepared" / "hash"
+    # The prompt is dated 2000 days before the index date, far outside the 365 day window.
+    _tokenized_dataset_dict(
+        {p: index for p in range(1, 7)}, prompt_offset_days=2000, offsets_by_person=offsets_by_person
+    ).save_to_disk(str(tokenized))
+    model_dir = tmp_path / "model"
+    make_model().save_pretrained(model_dir)
+    make_tokenizer().save_pretrained(model_dir)
+    config = tmp_path / "finetune.yaml"
+    config.write_text(
+        yaml.safe_dump(
+            {
+                "data_folder": "unused",
+                "dataset_prepared_path": "unused",
+                "preprocessing_num_workers": 1,
+                "preprocessing_batch_size": 4,
+                "observation_window": 365,
+                "is_data_in_meds": False,
+                "keep_demographic_prompt": keep,
+            }
+        ),
+        encoding="utf-8",
+    )
+    out = tmp_path / "features"
+    mod = step("15_linear_probe_features.py")
+    rc = mod.main(
+        [
+            "--splits-file", str(splits_file),
+            "--tokenized-dataset", str(tmp_path / "pretrain_prepared"),
+            "--finetune-config", str(config),
+            "--model-dir", str(model_dir),
+            "--output-dir", str(out),
+            "--report-dir", str(tmp_path / "report"),
+            "--ctx", str(ctx),
+            "--batch-size", str(batch_size),
+            "--device", "cpu",
+        ]
+    )  # fmt: skip
+    assert rc == 0
+    return out
+
+
+# Person 3 has no event inside the 365 day window; the others have events at 1, 50 and 365 days.
+PROMPT_OFFSETS = {3: [366, 500, 0]}
+
+
+def test_step15_keeps_demographic_prompt_and_counts_empty_windows_without_it(step, tmp_path):
+    out = _run_step15_with_prompt(step, tmp_path, PROMPT_OFFSETS, ctx=9, batch_size=2)
+    status = json.loads((tmp_path / "report" / "status.json").read_text())
+    assert status["status"] == "pass"
+    val = pd.read_parquet(out / "val" / "meta.parquet").set_index("person_id")
+    assert val.loc[3, "n_event_tokens"] == 0 and val.loc[3, "n_tokens_before_truncation"] == 4
+    assert val.loc[4, "n_event_tokens"] == 3 and val.loc[4, "n_tokens_before_truncation"] == 7
+    assert val["demographic_prompt_in_input"].all()
+    assert not val["truncated"].any()
+    assert (val["n_event_tokens"] == 0).sum() == 1
+
+
+def test_step15_prompt_features_are_batch_size_invariant(step, tmp_path):
+    outs = {bs: _run_step15_with_prompt(step, tmp_path / f"bs{bs}", PROMPT_OFFSETS, 9, bs) for bs in (1, 6)}
+    for split in ("train", "val", "test"):
+        for kind in lp.FEATURE_KINDS:
+            a = np.load(outs[1] / split / f"features_{kind}.npy")
+            b = np.load(outs[6] / split / f"features_{kind}.npy")
+            np.testing.assert_allclose(a, b, atol=1e-5, rtol=1e-4)
+
+
+def test_step15_prompt_survives_truncation(step, tmp_path):
+    # ctx 6 keeps 5 record tokens: the prompt plus the first [VS]-aligned tail token or none.
+    out = _run_step15_with_prompt(step, tmp_path, PROMPT_OFFSETS, ctx=6, batch_size=2)
+    val = pd.read_parquet(out / "val" / "meta.parquet").set_index("person_id")
+    assert val.loc[4, "truncated"] and val.loc[4, "demographic_prompt_in_input"]
+
+
+def test_step15_without_flag_drops_the_prompt(step, tmp_path):
+    out = _run_step15_with_prompt(step, tmp_path, PROMPT_OFFSETS, ctx=9, batch_size=2, keep=False)
+    val = pd.read_parquet(out / "val" / "meta.parquet").set_index("person_id")
+    assert val.loc[4, "n_tokens_before_truncation"] == 3
+    assert val.loc[3, "n_tokens_before_truncation"] == 0
+    assert not val["demographic_prompt_in_input"].any()
 
 
 # --------------------------------------------------------------------------
