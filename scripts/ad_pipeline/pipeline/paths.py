@@ -102,6 +102,17 @@ def features_dir(label: str) -> Path:
     """Baseline features folder for a run, e.g. ``build/w_365_ctx512/baselines/features``."""
     return baselines_dir(label) / "features"
 
+
+def linear_probe_dir(label: str) -> Path:
+    """Frozen-CEHR-BERT linear probe folder for a run, e.g. ``build/w_365_ctx512/linear_probe``."""
+    return run_dir(label) / "linear_probe"
+
+
+def linear_probe_features_dir(label: str) -> Path:
+    """Per-split frozen-model features, e.g. ``build/w_365_ctx512/linear_probe/features``."""
+    return linear_probe_dir(label) / "features"
+
+
 COHORT_DIR = OMOP_DIR / "ad_cohort"
 # The labeled cohort is split up front (step 6) into a fine-tuning set and a held-out
 # test set, each in its own folder (cohort_folder reads *.parquet from a single folder).

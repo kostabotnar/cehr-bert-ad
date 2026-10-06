@@ -1,0 +1,291 @@
+"""Shared, testable code for the frozen CEHR-BERT linear probe (steps 15 and 16).
+
+Step 15 turns each patient's pre-index history into a fixed-size vector with the frozen
+pretrained encoder; step 16 fits an L2 logistic regression on those vectors. Two feature
+kinds are produced from ``last_hidden_state``:
+
+  * ``cls``  : the hidden state at position 0, where the collator prepends the [CLS] token
+  * ``mean`` : the mean over positions with ``attention_mask == 1`` (CLS included)
+
+``pooler_output`` is never used: the pretraining objective (masked tokens) does not train
+the pooler. cehrbert's own ``linear_prob/compute_cehrbert_features.py`` is not reused because
+its CLS path returns a (B, B, H) block for batch sizes above 1.
+"""
+
+from __future__ import annotations
+
+import dataclasses
+import json
+import subprocess
+import sys
+from contextlib import nullcontext
+from pathlib import Path
+from typing import Iterable
+
+import numpy as np
+import pandas as pd
+import torch
+from sklearn.linear_model import LogisticRegression
+from sklearn.model_selection import GridSearchCV, StratifiedKFold
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import StandardScaler
+
+FEATURE_KINDS = ("cls", "mean")
+SPLIT_NAMES = ("train", "val", "test")
+
+# Columns the collator emits that the encoder does not accept.
+NON_MODEL_COLUMNS = ("person_id", "index_date", "age_at_index", "classifier_label")
+
+# Same evaluation arguments for every model (plan section 3).
+EVAL_N_BOOTSTRAP = 2000
+EVAL_SEED = 42
+EVAL_CAL_BINS = 10
+
+C_GRID = tuple(float(c) for c in np.logspace(-4, 2, 7))
+CLASS_WEIGHT_GRID = (None, "balanced")
+
+
+# --------------------------------------------------------------------------- #
+# Step 15: feature extraction
+# --------------------------------------------------------------------------- #
+def pool_features(
+    last_hidden_state: torch.Tensor,
+    attention_mask: torch.Tensor,
+    input_ids: torch.Tensor,
+    cls_token_index: int,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Return ``(cls, mean)`` features, each of shape (B, H), from a (B, L, H) hidden state."""
+    if not bool((input_ids[:, 0] == cls_token_index).all()):
+        raise AssertionError("position 0 is not the [CLS] token in every row of the batch")
+    hidden = last_hidden_state.float()
+    cls = hidden[:, 0, :]
+    mask = (attention_mask == 1).to(hidden.dtype).unsqueeze(-1)
+    mean = (hidden * mask).sum(dim=1) / mask.sum(dim=1).clamp(min=1.0)
+    return cls, mean
+
+
+def load_cohort_args(config_path: str | Path, cohort_folder: str | Path, tokenized_path: str | Path, window_days: int):
+    """Build the ``(CehrBertArguments, DataTrainingArguments)`` that ``extract_cohort_sequences`` reads.
+
+    Preprocessing settings (workers, batch size, MEDS flag) come from the fine-tune config;
+    the cohort folder, tokenized dataset and observation window are overridden.
+    """
+    import yaml
+    from cehrbert.runners.hf_runner_argument_dataclass import CehrBertArguments, DataTrainingArguments
+    from transformers import HfArgumentParser
+
+    cfg = yaml.safe_load(Path(config_path).read_text(encoding="utf-8"))
+    cfg["cohort_folder"] = str(cohort_folder)
+    cfg["tokenized_full_dataset_path"] = str(tokenized_path)
+    cfg["observation_window"] = int(window_days) if int(window_days) > 0 else 0
+    parser = HfArgumentParser((CehrBertArguments, DataTrainingArguments))
+    cehrbert_args, data_args = parser.parse_dict(cfg, allow_extra_keys=True)
+    return cehrbert_args, data_args
+
+
+def build_split_dataset(split_df, work_dir: str | Path, config_path: str | Path, tokenized_path, window_days: int):
+    """Window and label one canonical split with cehrbert's ``extract_cohort_sequences``.
+
+    The split is written to its own cohort folder (person_id, index_date, label). The
+    function keeps the pretraining train/validation assignment of each patient, so the
+    returned splits are concatenated into one dataset, as the fine-tune runner does for
+    predict-only runs.
+    """
+    from cehrbert.runners.data_utils import extract_cohort_sequences
+    from datasets import concatenate_datasets
+
+    cohort_folder = Path(work_dir)
+    cohort_folder.mkdir(parents=True, exist_ok=True)
+    split_df.select(["person_id", "index_date", "label"]).write_parquet(cohort_folder / "cohort.parquet")
+    cehrbert_args, data_args = load_cohort_args(config_path, cohort_folder, tokenized_path, window_days)
+    processed = extract_cohort_sequences(data_args, cehrbert_args)
+    return concatenate_datasets(list(processed.values()))
+
+
+def load_frozen_model(model_dir: str | Path, device: str = "cuda"):
+    """Load ``CehrBertForPreTraining`` with sdpa attention in eval mode on ``device``."""
+    from cehrbert.models.hf_models.hf_cehrbert import CehrBertForPreTraining
+
+    model = CehrBertForPreTraining.from_pretrained(str(model_dir), attn_implementation="sdpa")
+    return model.to(device).eval()
+
+
+@dataclasses.dataclass
+class ExtractedFeatures:
+    cls: np.ndarray
+    mean: np.ndarray
+    person_id: np.ndarray
+    label: np.ndarray
+    n_tokens_before_truncation: np.ndarray
+    truncated: np.ndarray
+
+
+def _batches(dataset, batch_size: int) -> Iterable[list[dict]]:
+    """Yield lists of per-patient records, in dataset order."""
+    for chunk in dataset.iter(batch_size=batch_size):
+        keys = list(chunk.keys())
+        n = len(chunk[keys[0]])
+        yield [{k: chunk[k][i] for k in keys} for i in range(n)]
+
+
+@torch.no_grad()
+def extract_features(
+    model,
+    dataset,
+    tokenizer,
+    max_length: int = 512,
+    batch_size: int = 128,
+    device: str = "cuda",
+    amp_dtype: torch.dtype | None = torch.bfloat16,
+    progress_every: int = 0,
+) -> ExtractedFeatures:
+    """Run the frozen encoder over ``dataset`` (rows in, rows out, same order).
+
+    ``n_tokens_before_truncation`` is ``len(input_ids)`` of the record as it leaves
+    ``extract_cohort_sequences`` (the 365-day window, before the collator adds [CLS] and
+    keeps the most recent tokens). The collator keeps ``max_length - 1`` record tokens, so
+    a patient is ``truncated`` when ``n_tokens_before_truncation > max_length - 1``.
+    """
+    from cehrbert.data_generators.hf_data_generator.hf_dataset_collator import CehrBertDataCollator
+
+    collator = CehrBertDataCollator(tokenizer, max_length=max_length, is_pretraining=False)
+    model.eval()
+    cls_parts, mean_parts = [], []
+    person_ids, labels, n_tokens = [], [], []
+    done = 0
+    n_batches = 0
+    for records in _batches(dataset, batch_size):
+        person_ids.extend(int(r["person_id"]) for r in records)
+        labels.extend(int(r["classifier_label"]) for r in records)
+        n_tokens.extend(len(r["input_ids"]) for r in records)
+        batch = collator(records)
+        for col in NON_MODEL_COLUMNS:
+            batch.pop(col, None)
+        batch = {k: v.to(device) for k, v in batch.items()}
+        use_amp = amp_dtype is not None and torch.device(device).type == "cuda"
+        ctx = torch.autocast(device_type="cuda", dtype=amp_dtype) if use_amp else nullcontext()
+        with ctx:
+            hidden = model.bert(**batch).last_hidden_state
+        cls, mean = pool_features(hidden, batch["attention_mask"], batch["input_ids"], tokenizer.cls_token_index)
+        cls_parts.append(cls.cpu().numpy().astype(np.float32))
+        mean_parts.append(mean.cpu().numpy().astype(np.float32))
+        done += len(records)
+        n_batches += 1
+        if progress_every and n_batches % progress_every == 0:
+            print(f"  {done} rows", flush=True)
+
+    hidden_size = model.config.hidden_size
+    n_tokens_arr = np.asarray(n_tokens, dtype=np.int64)
+    return ExtractedFeatures(
+        cls=np.concatenate(cls_parts) if cls_parts else np.zeros((0, hidden_size), dtype=np.float32),
+        mean=np.concatenate(mean_parts) if mean_parts else np.zeros((0, hidden_size), dtype=np.float32),
+        person_id=np.asarray(person_ids, dtype=np.int64),
+        label=np.asarray(labels, dtype=np.int64),
+        n_tokens_before_truncation=n_tokens_arr,
+        truncated=n_tokens_arr > (max_length - 1),
+    )
+
+
+def save_split_features(out_dir: str | Path, feats: ExtractedFeatures, index_dates: np.ndarray) -> list[Path]:
+    """Write features_<kind>.npy and meta.parquet for one split; returns the written paths."""
+    out = Path(out_dir)
+    out.mkdir(parents=True, exist_ok=True)
+    written = []
+    for kind in FEATURE_KINDS:
+        path = out / f"features_{kind}.npy"
+        np.save(path, getattr(feats, kind).astype(np.float32))
+        written.append(path)
+    meta = pd.DataFrame(
+        {
+            "person_id": feats.person_id,
+            "index_date": pd.to_datetime(np.asarray(index_dates)),
+            "label": feats.label,
+            "n_tokens_before_truncation": feats.n_tokens_before_truncation,
+            "truncated": feats.truncated.astype(bool),
+        }
+    )
+    meta_path = out / "meta.parquet"
+    meta.to_parquet(meta_path, index=False)
+    written.append(meta_path)
+    return written
+
+
+def load_split_features(features_dir: str | Path, split: str, kind: str) -> tuple[np.ndarray, pd.DataFrame]:
+    """Load ``(X, meta)`` for one split and feature kind, checking that the rows line up."""
+    d = Path(features_dir) / split
+    X = np.load(d / f"features_{kind}.npy")
+    meta = pd.read_parquet(d / "meta.parquet")
+    if len(X) != len(meta):
+        raise ValueError(f"{d}: {len(X)} feature rows but {len(meta)} meta rows")
+    return X, meta
+
+
+# --------------------------------------------------------------------------- #
+# Step 16: tuning
+# --------------------------------------------------------------------------- #
+def build_search(cv_folds: int = 5, seed: int = 42, n_jobs: int = -1) -> GridSearchCV:
+    """StandardScaler + L2 logistic regression, tuned over C and class_weight by CV AUROC."""
+    pipe = Pipeline(
+        [
+            ("scale", StandardScaler()),
+            ("clf", LogisticRegression(penalty="l2", solver="lbfgs", max_iter=2000)),
+        ]
+    )
+    grid = {"clf__C": list(C_GRID), "clf__class_weight": list(CLASS_WEIGHT_GRID)}
+    cv = StratifiedKFold(n_splits=cv_folds, shuffle=True, random_state=seed)
+    return GridSearchCV(pipe, grid, cv=cv, scoring="roc_auc", n_jobs=n_jobs, refit=True)
+
+
+def fit_on_train(X_train: np.ndarray, y_train: np.ndarray, cv_folds: int, seed: int, n_jobs: int) -> GridSearchCV:
+    """Tune on the training rows only; the returned search holds the refit best estimator."""
+    search = build_search(cv_folds=cv_folds, seed=seed, n_jobs=n_jobs)
+    search.fit(X_train, y_train)
+    return search
+
+
+def choose_primary_kind(val_auroc: dict[str, float]) -> str:
+    """Feature kind with the highest validation AUROC (ties go to the first kind in FEATURE_KINDS)."""
+    return max(FEATURE_KINDS, key=lambda k: (val_auroc.get(k, float("-inf")), -FEATURE_KINDS.index(k)))
+
+
+def evaluate_command(
+    kind_dir: Path,
+    report_dir: Path,
+    n_bootstrap: int = EVAL_N_BOOTSTRAP,
+    seed: int = EVAL_SEED,
+    cal_bins: int = EVAL_CAL_BINS,
+) -> list[str]:
+    """Command line that runs 10_evaluate.py on one feature kind's prediction folders."""
+    script = Path(__file__).resolve().parents[1] / "10_evaluate.py"
+    return [
+        sys.executable,
+        str(script),
+        "--predictions",
+        str(kind_dir / "test_predictions"),
+        "--val-predictions",
+        str(kind_dir / "validation_predictions"),
+        "--results-dir",
+        str(kind_dir),
+        "--figures-dir",
+        str(kind_dir / "figures"),
+        "--report-dir",
+        str(report_dir),
+        "--n-bootstrap",
+        str(n_bootstrap),
+        "--seed",
+        str(seed),
+        "--cal-bins",
+        str(cal_bins),
+    ]
+
+
+def run_evaluate(kind_dir: Path, report_dir: Path, **kwargs) -> int:
+    cmd = evaluate_command(kind_dir, report_dir, **kwargs)
+    print("+ " + " ".join(cmd))
+    return subprocess.run(cmd, check=False).returncode
+
+
+def write_json(path: Path, obj) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(obj, indent=2, default=str), encoding="utf-8")
+    return path
