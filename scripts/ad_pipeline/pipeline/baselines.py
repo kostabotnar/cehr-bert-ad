@@ -2,13 +2,11 @@
 
 These baselines predict the *same* AD task as CEHR-BERT and are scored by the *same*
 evaluation code (``pipeline.evaluation`` / ``10_evaluate.py``). To make the comparison
-fair, they reuse the identical patient partition:
-
-  * **test**  : ``data/omop_data/ad_cohort/test``         (held out up front, step 6)
-  * **val**   : the patients CEHR-BERT used for internal validation, recovered from the
-                ``subject_id`` column of ``data/finetune_results/validation_predictions``
-                (so all models pick their operating threshold on the same patients)
-  * **train** : the finetune cohort minus the val patients
+fair, they reuse the identical patient partition, read from the canonical split file
+written by step 6 (``data/omop_data/ad_cohort/splits.parquet``, one row per patient with
+``split`` in {train, val, test}). Only when that file is missing does
+:func:`recover_splits` fall back to CEHR-BERT's tokenized validation split or a
+deterministic hash split, and it logs a warning when it does.
 
 CEHR-BERT consumes token sequences; the baselines need a tabular design matrix, which
 this module builds directly from the OMOP source tables, **frozen strictly before each
@@ -30,6 +28,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import logging
 from pathlib import Path
 from typing import Dict, List, Sequence, Tuple
 
@@ -39,6 +38,8 @@ import scipy.sparse as sp
 
 from . import paths
 from .omop_validation import table_glob
+
+logger = logging.getLogger(__name__)
 
 # Domains contributing count features: (feature-prefix, table, concept column, date column).
 DOMAINS: List[Tuple[str, str, str, str]] = [
@@ -117,7 +118,32 @@ class Splits:
     train: pl.DataFrame
     val: pl.DataFrame
     test: pl.DataFrame
-    val_source: str  # "cehrbert_prepared_validation_split" or "deterministic_fallback"
+    # CANONICAL_SPLITS_SOURCE, or when the split file is missing
+    # "cehrbert_prepared_validation_split" / "deterministic_fallback"
+    val_source: str
+
+
+CANONICAL_SPLITS_SOURCE = "canonical_splits_file"
+
+
+def load_canonical_splits(splits_file: str | Path) -> Splits:
+    """Build ``Splits`` from the step 6 split file (person_id, index_date, label, split)."""
+    df = pl.read_parquet(str(splits_file)).select(
+        pl.col("person_id").cast(pl.Int64),
+        pl.col("index_date").cast(pl.Date),
+        pl.col("label").cast(pl.Int64),
+        pl.col("split").cast(pl.Utf8),
+    )
+    unknown = set(df.get_column("split").unique().to_list()) - {"train", "val", "test"}
+    if unknown:
+        raise ValueError(f"{splits_file}: unexpected split values {sorted(unknown)}")
+    if df.get_column("person_id").n_unique() != df.height:
+        raise ValueError(f"{splits_file}: a person_id appears more than once")
+
+    def _part(name: str) -> pl.DataFrame:
+        return df.filter(pl.col("split") == name).drop("split").sort("person_id")
+
+    return Splits(train=_part("train"), val=_part("val"), test=_part("test"), val_source=CANONICAL_SPLITS_SOURCE)
 
 
 def recover_splits(
@@ -126,12 +152,22 @@ def recover_splits(
     prepared_dir: str | Path = paths.FINETUNE_PREPARED_DIR,
     val_fraction: float = 0.1,
     seed: int = 42,
+    splits_file: str | Path = paths.COHORT_SPLITS_FILE,
 ) -> Splits:
     """Build the train/val/test cohort frames shared by all baselines.
 
-    Val patients are taken from CEHR-BERT's tokenized validation split when available
-    (exact parity); otherwise a deterministic 10% split of the finetune cohort is used.
+    The canonical split file from step 6 is used whenever it exists, so every model sees
+    the same partition. Only if it is missing: val patients come from CEHR-BERT's
+    tokenized validation split when available, otherwise from a deterministic 10% split
+    of the finetune cohort.
     """
+    if Path(splits_file).is_file():
+        return load_canonical_splits(splits_file)
+    logger.warning(
+        "Canonical splits file %s not found; falling back to legacy split recovery. "
+        "Rerun step 6 so all models share one partition.",
+        splits_file,
+    )
     finetune = load_cohort(finetune_dir)
     test = load_cohort(test_dir)
     ft_ids = set(finetune.get_column("person_id").to_list())

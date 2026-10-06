@@ -279,7 +279,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--models", nargs="+", default=["lr", "xgboost"],
                         help="Baseline model keys to evaluate and compare")
     parser.add_argument("--window-days", type=int, default=paths.DEFAULT_WINDOW_DAYS,
-                        help="Look-back window in days; negative or 0 => unbounded (all history)")
+                        help="Look-back window in days; negative => unbounded (all history)")
     parser.add_argument("--ctx", type=int, default=paths.DEFAULT_CTX,
                         help="CEHR-BERT token cap; part of the run label")
     parser.add_argument("--baselines-dir", default=None,

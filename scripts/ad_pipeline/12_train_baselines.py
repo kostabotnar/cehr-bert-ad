@@ -149,7 +149,7 @@ def main(argv: list[str] | None = None) -> int:
                         help="Parent folder for lr/ and xgboost/ outputs "
                              "(default: per-run baselines_dir for the run label)")
     parser.add_argument("--window-days", type=int, default=paths.DEFAULT_WINDOW_DAYS,
-                        help="Look-back window in days; negative or 0 => unbounded (all history)")
+                        help="Look-back window in days; negative => unbounded (all history)")
     parser.add_argument("--ctx", type=int, default=paths.DEFAULT_CTX,
                         help="CEHR-BERT token cap; part of the run label")
     parser.add_argument("--cv-folds", type=int, default=5)

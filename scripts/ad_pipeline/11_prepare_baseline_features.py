@@ -5,8 +5,8 @@ CEHR-BERT eats token sequences; L2 logistic regression and XGBoost need a fixed-
 design matrix. This step builds one from the OMOP source tables, using the *same* patient
 partition CEHR-BERT used so the downstream comparison is apples-to-apples:
 
-  * splits recovered by ``pipeline.baselines.recover_splits`` (test held out at step 6;
-    val = CEHR-BERT's validation patients; train = finetune minus val)
+  * splits read by ``pipeline.baselines.recover_splits`` from the canonical split file
+    written by step 6 (legacy fallbacks only when that file is missing)
   * features frozen strictly before each patient's ``index_date``, within a fixed
     look-back window (default 365 days = ad_finetune_config observation_window)
   * per-concept occurrence **counts** (condition / drug / procedure) + demographics
@@ -46,12 +46,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--data-dir", default=str(paths.OMOP_DIR))
     parser.add_argument("--finetune-dir", default=str(paths.COHORT_FINETUNE_DIR))
     parser.add_argument("--test-dir", default=str(paths.COHORT_TEST_DIR))
+    parser.add_argument("--splits-file", default=str(paths.COHORT_SPLITS_FILE),
+                        help="Canonical train/val/test split file from step 6")
     parser.add_argument("--prepared-dir", default=str(paths.FINETUNE_PREPARED_DIR),
-                        help="CEHR-BERT tokenized finetune dataset (its validation split defines val)")
+                        help="Fallback only: CEHR-BERT tokenized finetune dataset whose validation split defines val")
     parser.add_argument("--output-dir", default=None,
                         help="Features output dir (default: per-run features_dir for the run label)")
     parser.add_argument("--window-days", type=int, default=paths.DEFAULT_WINDOW_DAYS,
-                        help="Look-back window in days; negative or 0 => unbounded (all history)")
+                        help="Look-back window in days; negative => unbounded (all history)")
     parser.add_argument("--ctx", type=int, default=paths.DEFAULT_CTX,
                         help="CEHR-BERT token cap; part of the run label")
     parser.add_argument("--min-prevalence", type=float, default=bl.DEFAULT_MIN_PREVALENCE)
@@ -74,11 +76,11 @@ def main(argv: list[str] | None = None) -> int:
     report.add_metric("min_prevalence", args.min_prevalence)
 
     # --- recover the shared train/val/test partition -----------------------
-    splits = bl.recover_splits(args.finetune_dir, args.test_dir, args.prepared_dir)
+    splits = bl.recover_splits(args.finetune_dir, args.test_dir, args.prepared_dir, splits_file=args.splits_file)
     report.add_metric("val_split_source", splits.val_source)
-    report.warn("val split taken from CEHR-BERT tokenized validation split",
-                ok=splits.val_source == "cehrbert_prepared_validation_split",
-                detail=f"source={splits.val_source} (fallback = deterministic 10% of finetune)")
+    report.warn("splits taken from the canonical split file",
+                ok=splits.val_source == bl.CANONICAL_SPLITS_SOURCE,
+                detail=f"source={splits.val_source} (file: {args.splits_file})")
     for name, df in (("train", splits.train), ("val", splits.val), ("test", splits.test)):
         n_pos = int(df.filter(pl.col("label") == 1).height)
         report.add_metric(f"{name}_size", df.height)
