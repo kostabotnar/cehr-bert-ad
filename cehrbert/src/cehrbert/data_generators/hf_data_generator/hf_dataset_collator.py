@@ -24,7 +24,7 @@ class CehrBertDataCollator:
         keep_demographic_prompt: bool = False,
     ):
         self.tokenizer = tokenizer
-        # In non-pretraining mode, keep the leading demographic prompt tokens when truncating to the tail.
+        # Keep the leading demographic prompt tokens when truncating, for tail and random truncation.
         self.keep_demographic_prompt = keep_demographic_prompt
         self.max_length = max_length
         self.mlm_probability = mlm_probability
@@ -209,11 +209,11 @@ class CehrBertDataCollator:
         return inputs, labels
 
     def _demographic_prompt_length(self, record: Dict[str, Any]) -> int:
-        """Length of the leading demographic prompt when it must survive tail truncation, else 0.
+        """Length of the leading demographic prompt when it must survive truncation, else 0.
 
         The prompt is 4 tokens, or 2 (gender and race) when the first visit is after the index date.
         """
-        if not self.keep_demographic_prompt or self.truncate_type != TruncationType.TAIL:
+        if not self.keep_demographic_prompt:
             return 0
         ages = record.get("ages")
         return 0 if ages is None else demographic_prompt_length_from_ages(ages)
@@ -237,7 +237,6 @@ class CehrBertDataCollator:
         sample_packing = getattr(self, "sample_packing", False)
         max_length_allowed = self.max_length if max_length_allowed is None else max_length_allowed
         seq_length = len(record["input_ids"])
-        prompt_length = 0
         # Subtract one for the [CLS] token
         new_max_length = max_length_allowed if sample_packing else max_length_allowed - 1
 
@@ -245,10 +244,18 @@ class CehrBertDataCollator:
         if seq_length <= new_max_length:
             return record
 
+        # With keep_demographic_prompt the prompt is kept in front and the slice is chosen from the
+        # rest of the sequence, so it gets new_max_length - prompt_length tokens. With no prompt the
+        # code below is the original truncation, including its calls to random.
+        prompt_length = self._demographic_prompt_length(record) if not sample_packing else 0
+        if prompt_length >= new_max_length:
+            prompt_length = 0
+        slice_length = new_max_length - prompt_length
+
         # If it is random truncate, we don't care if we slice at the start or end of a visit
         if self.truncate_type == TruncationType.RANDOM_TRUNCATION:
-            start_index = random.randint(0, seq_length - new_max_length)
-            end_index = min(seq_length, start_index + new_max_length)
+            start_index = random.randint(prompt_length, seq_length - slice_length)
+            end_index = min(seq_length, start_index + slice_length)
         elif self.truncate_type in (
             TruncationType.RANDOM_RIGHT_TRUNCATION,
             TruncationType.RANDOM_COMPLETE,
@@ -256,7 +263,7 @@ class CehrBertDataCollator:
             # We randomly pick a [VS] token within the window of valid start positions so a
             # full-length sample can be extracted starting at a visit boundary.
             starting_points = []
-            for i in range(seq_length - new_max_length):
+            for i in range(prompt_length, seq_length - slice_length):
                 current_token = record["input_ids"][i]
                 if current_token == self.vs_token_id:
                     starting_points.append(i)
@@ -273,12 +280,12 @@ class CehrBertDataCollator:
                 start_index = next(
                     (
                         i
-                        for i in range(seq_length - new_max_length, seq_length)
+                        for i in range(seq_length - slice_length, seq_length)
                         if record["input_ids"][i] == self.vs_token_id
                     ),
-                    seq_length - new_max_length,
+                    seq_length - slice_length,
                 )
-            end_index = min(start_index + new_max_length, seq_length)
+            end_index = min(start_index + slice_length, seq_length)
 
             # We randomly backtrack to a [VE] token so the sample is complete
             if self.truncate_type == TruncationType.RANDOM_COMPLETE:
@@ -288,8 +295,7 @@ class CehrBertDataCollator:
                         end_index = i
                         break
         else:
-            prompt_length = self._demographic_prompt_length(record) if not sample_packing else 0
-            start_index = max(prompt_length, seq_length - (new_max_length - prompt_length))
+            start_index = max(prompt_length, seq_length - slice_length)
             end_index = seq_length
             for i in range(start_index, seq_length):
                 current_token = record["input_ids"][i]

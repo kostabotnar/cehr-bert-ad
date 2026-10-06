@@ -26,6 +26,9 @@ is_data_in_meds: false
 inpatient_att_function_type: "none"
 include_auxiliary_token: true
 include_demographic_prompt: false
+# Keep the four demographic prompt tokens (year, age, gender, race) at the start of every
+# randomly truncated pretraining sample. Also part of the prepared-dataset hash.
+keep_demographic_prompt: true
 
 # Training settings
 do_train: true
