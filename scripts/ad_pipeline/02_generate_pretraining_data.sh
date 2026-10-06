@@ -24,6 +24,9 @@ export SPARK_EXECUTOR_CORES="${SPARK_EXECUTOR_CORES:-2}"
 export SPARK_DRIVER_MEMORY="${SPARK_DRIVER_MEMORY:-16g}"
 export SPARK_EXECUTOR_MEMORY="${SPARK_EXECUTOR_MEMORY:-16g}"
 PYTHON="${PYTHON:-python}"
+# Spark starts its Python workers from PYSPARK_PYTHON; without it they use the system python, which lacks cehrbert_data.
+export PYSPARK_PYTHON="${PYSPARK_PYTHON:-${PYTHON}}"
+export PYSPARK_DRIVER_PYTHON="${PYSPARK_DRIVER_PYTHON:-${PYTHON}}"
 # Birth datetimes of 1900-01-01 trip Spark's legacy-calendar guard on Parquet writes; the output is only read
 # by Spark 3 and pyarrow, which both use the proleptic Gregorian calendar, so write values unchanged.
 REBASE="spark.sql.legacy.parquet.int96RebaseModeInWrite=CORRECTED"
