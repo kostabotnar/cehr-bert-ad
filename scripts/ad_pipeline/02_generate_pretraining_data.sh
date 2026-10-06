@@ -31,7 +31,11 @@ export PYSPARK_DRIVER_PYTHON="${PYSPARK_DRIVER_PYTHON:-${PYTHON}}"
 # by Spark 3 and pyarrow, which both use the proleptic Gregorian calendar, so write values unchanged.
 REBASE="spark.sql.legacy.parquet.int96RebaseModeInWrite=CORRECTED"
 REBASE_DT="spark.sql.legacy.parquet.datetimeRebaseModeInWrite=CORRECTED"
-export PYSPARK_SUBMIT_ARGS="${PYSPARK_SUBMIT_ARGS:---conf ${REBASE} --conf ${REBASE_DT} pyspark-shell}"
+# Local mode with all 20 cores ran out of memory writing patient_sequence (long patient histories);
+# 8 concurrent tasks with a 96g driver completed in about 46 minutes on the DGX Spark.
+SPARK_MASTER="${SPARK_MASTER:-local[8]}"
+SPARK_SHUFFLE_PARTITIONS="${SPARK_SHUFFLE_PARTITIONS:-1000}"
+export PYSPARK_SUBMIT_ARGS="${PYSPARK_SUBMIT_ARGS:---master ${SPARK_MASTER} --driver-memory ${SPARK_DRIVER_MEMORY} --conf spark.sql.shuffle.partitions=${SPARK_SHUFFLE_PARTITIONS} --conf ${REBASE} --conf ${REBASE_DT} pyspark-shell}"
 
 echo "Project root : ${PROJECT_ROOT}"
 echo "Input folder : ${INPUT_FOLDER}"
