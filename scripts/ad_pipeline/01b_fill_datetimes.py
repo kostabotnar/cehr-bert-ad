@@ -4,9 +4,13 @@
 Some OMOP exports leave every ``*_datetime`` column null while the ``*_date`` columns are
 populated. cehrbert_data orders visits by ``visit_start_datetime``, so step 2 needs these
 filled. Null datetimes become midnight of the matching date (start from start date, end
-from end date); non-null datetimes are never changed. ``person.birth_datetime`` is built
+from end date); non-null datetimes keep their value. ``person.birth_datetime`` is built
 from year_of_birth, month_of_birth, day_of_birth, falling back to January 1 of
 year_of_birth when the month is null.
+
+All handled columns are written as UTC-adjusted timestamps (Spark 3.1 cannot read the
+non-adjusted type and returns raw longs); files whose columns are filled but not yet
+UTC-adjusted are converted too, keeping the wall-clock value.
 
 Files are rewritten in place, one at a time (polars streaming, snappy), through a temporary
 file and an atomic rename. The step is idempotent. It refuses to run on a path under
@@ -62,12 +66,19 @@ def main(argv: list[str] | None = None) -> int:
                 detail=(
                     f"rows={c.rows} nulls_before={c.nulls_before} "
                     f"{'would_fill' if args.dry_run else 'filled'}={c.filled} "
-                    f"nulls_after={c.nulls_after} source={c.source}"
+                    f"nulls_after={c.nulls_after} "
+                    f"tz_{'would_convert' if args.dry_run else 'converted'}={c.tz_converted} source={c.source}"
                 ),
             )
             report.add_metric(
                 f"{table}.{c.column}",
-                {"rows": c.rows, "nulls_before": c.nulls_before, "filled": c.filled, "nulls_after": c.nulls_after},
+                {
+                    "rows": c.rows,
+                    "nulls_before": c.nulls_before,
+                    "filled": c.filled,
+                    "nulls_after": c.nulls_after,
+                    "tz_converted": c.tz_converted,
+                },
             )
         if result.columns:
             report.note(f"{table}: {len(result.files)} file(s), {result.files_rewritten} rewritten")
