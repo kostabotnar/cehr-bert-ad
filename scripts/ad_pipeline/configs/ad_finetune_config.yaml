@@ -7,9 +7,12 @@ model_name_or_path: "data/pretrain_results"
 tokenizer_name_or_path: "data/pretrain_results"
 
 # Data paths
-# tokenized_full_dataset_path: Path to prepared/tokenized dataset from pretraining
+# tokenized_full_dataset_path: every patient (test patients included) tokenized with the pretrained
+# tokenizer by step 5b. Pretraining itself excludes the test patients, so its prepared dataset
+# under data/pretrain_prepared cannot be used here. Its validation split is the canonical val
+# split, which extract_cohort_sequences keeps as the fine-tuning validation set.
 # This enables the extract_cohort_sequences flow which properly applies observation_window
-tokenized_full_dataset_path: "data/pretrain_prepared"
+tokenized_full_dataset_path: "data/full_tokenized"
 data_folder: "data/cehrbert_data/patient_sequence"  # Not used when tokenized_full_dataset_path is set
 # Fine-tuning uses ONLY the fine-tuning split of the cohort (step 6 holds out a test set).
 cohort_folder: "data/omop_data/ad_cohort/finetune"
