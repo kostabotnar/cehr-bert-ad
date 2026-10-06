@@ -17,8 +17,8 @@ patient's index_date** and limited to a fixed look-back window (365 days, matchi
   * demographics: age at index, one-hot gender, one-hot race
 
 The vocabulary (which concepts become columns) and the demographic categories are fit on
-**train only** — concepts present in at least ``min_prevalence`` of training patients are
-kept — then applied unchanged to val/test, so there is no train/test leakage.
+**train only** (concepts present in at least ``min_prevalence`` of training patients are
+kept), then applied unchanged to val/test, so there is no train/test leakage.
 
 The module is deliberately model-free and depends only on polars / numpy / scipy so it is
 cheap to unit-test with synthetic fixtures.
