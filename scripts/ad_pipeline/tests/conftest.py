@@ -73,13 +73,16 @@ def omop_dir(tmp_path: Path) -> Path:
         ),
     )
 
-    # concept_id 1001/1002 = AD; 2002 = non-AD
+    # Real layout: condition_concept_id is a standard (SNOMED) id; ICD strings are in condition_source_value.
     write(
         "condition_occurrence",
         pl.DataFrame(
             {
                 "person_id": [1, 2, 3, 4, 5],
-                "condition_concept_id": [1001, 1002, 2002, 2002, 2002],
+                "condition_concept_id": [3001, 3001, 3002, 3002, 3002],
+                "condition_source_value": [
+                    "ICD-10-CM:G30.9", "ICD-9-CM:331.0", "ICD-10-CM:E11.9", "ICD-10-CM:G31.0", "X-ICD-10-CM:G30",
+                ],
                 "condition_start_date": [
                     D(2020, 1, 1), D(2020, 6, 1), D(2019, 1, 1), D(2018, 1, 1), D(2019, 6, 1)
                 ],
@@ -92,7 +95,8 @@ def omop_dir(tmp_path: Path) -> Path:
         pl.DataFrame(
             {
                 "concept_id": [1001, 1002, 2002],
-                "concept_code": ["ICD-10-CM:G30.9", "ICD-9-CM:331.0", "ICD-10-CM:E11.9"],
+                "vocabulary_id": ["ICD10CM", "ICD9CM", "ICD10CM"],
+                "concept_code": ["G30.9", "331.0", "E11.9"],
             }
         ),
     )

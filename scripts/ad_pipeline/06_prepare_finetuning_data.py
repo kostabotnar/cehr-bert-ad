@@ -15,8 +15,10 @@ Task framing ("predict AD anytime in the future"):
   * Inclusion: every patient needs >= MIN_HISTORY days of record (and a visit) before
     index_date, matching observation_window in ad_finetune_config.yaml.
 
-AD is identified from source ICD codes because this dataset's concept table is
-de-identified (concept_code holds strings like "ICD-10-CM:G30.9").
+AD is identified from condition_occurrence.condition_source_value, which holds strings
+like "ICD-10-CM:G30.9". condition_concept_id holds standard SNOMED ids, and the concept
+table uses plain codes (vocabulary ICD10CM, concept_code "G30.9"), so neither can be
+matched against the "ICD-10-CM:" strings.
 
 A final step intersects the cohort with the person_ids present in the tokenized
 pretraining dataset (data/pretrain_prepared); patients without a usable sequence would
@@ -42,9 +44,14 @@ from pipeline import paths  # noqa: E402
 from pipeline.omop_validation import table_glob  # noqa: E402
 from pipeline.reporting import StepReport  # noqa: E402
 
-# Source codes for Alzheimer's disease. Matched as a prefix against concept_code, so
+# Source codes for Alzheimer's disease. Matched as a prefix against condition_source_value, so
 # "ICD-10-CM:G30" captures G30.0/G30.1/G30.8/G30.9.
 AD_CODE_PATTERNS = [r"ICD-9-CM:331\.0", r"ICD-10-CM:G30"]
+AD_SOURCE_REGEX = "^(" + "|".join(AD_CODE_PATTERNS) + ")"
+
+
+def is_ad_source_value() -> pl.Expr:
+    return pl.col("condition_source_value").str.contains(AD_SOURCE_REGEX)
 
 
 def _require_glob(data_dir: Path, table: str) -> str:
@@ -63,17 +70,20 @@ def build_cohort(
     """Build the (pre-tokenized-filter) cohort dataframe and record stats on ``report``."""
     gap = pl.duration(days=gap_days)
 
-    concept = pl.scan_parquet(_require_glob(data_dir, "concept")).select("concept_id", "concept_code")
-    ad_pat = "|".join(AD_CODE_PATTERNS)
-    ad_ids = (
-        concept.filter(pl.col("concept_code").str.contains(ad_pat))
-        .select("concept_id")
-        .collect()
-        .get_column("concept_id")
-        .to_list()
+    ad_rows = (
+        pl.scan_parquet(_require_glob(data_dir, "condition_occurrence"))
+        .filter(is_ad_source_value())
+        .select("person_id", pl.col("condition_start_date").cast(pl.Date))
     )
-    report.add_check("AD concept ids matched", bool(ad_ids), detail=f"{len(ad_ids)} ids; patterns={AD_CODE_PATTERNS}")
-    if not ad_ids:
+    n_rows, n_patients = ad_rows.select(pl.len(), pl.col("person_id").n_unique()).collect().row(0)
+    report.add_metric("ad_condition_rows", n_rows)
+    report.add_metric("ad_condition_patients", n_patients)
+    report.add_check(
+        "AD condition rows found",
+        n_rows > 0,
+        detail=f"{n_rows} rows, {n_patients} patients; patterns={AD_CODE_PATTERNS}",
+    )
+    if n_rows == 0:
         return pl.DataFrame(schema={"person_id": pl.Int64, "index_date": pl.Date, "label": pl.Int64})
 
     visits = (
@@ -83,10 +93,7 @@ def build_cohort(
         .agg(first_visit=pl.col("visit_start_date").min(), last_visit=pl.col("visit_start_date").max())
     )
     first_ad = (
-        pl.scan_parquet(_require_glob(data_dir, "condition_occurrence"))
-        .filter(pl.col("condition_concept_id").is_in(ad_ids))
-        .select("person_id", pl.col("condition_start_date").cast(pl.Date))
-        .group_by("person_id")
+        ad_rows.group_by("person_id")
         .agg(first_ad_date=pl.col("condition_start_date").min())
     )
     persons = pl.scan_parquet(_require_glob(data_dir, "person")).select("person_id")
