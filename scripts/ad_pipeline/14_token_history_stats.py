@@ -221,7 +221,9 @@ def main(argv: list[str] | None = None) -> int:
     label = paths.run_label(args.window_days, args.ctx)
     results_dir = Path(args.results_dir) if args.results_dir else paths.eval_results_dir(label)
     figures_dir = Path(args.figures_dir) if args.figures_dir else paths.figures_dir(label)
-    report_dir = Path(args.report_dir) if args.report_dir else paths.build_report_dir_for("14_token_history_stats", label)
+    report_dir = (
+        Path(args.report_dir) if args.report_dir else paths.build_report_dir_for("14_token_history_stats", label)
+    )
 
     report = StepReport(
         "14_token_history_stats",
@@ -298,9 +300,7 @@ def main(argv: list[str] | None = None) -> int:
                 report.add_metric("windowed_tokens_median", round(combined_stats["p50"]))
                 report.add_metric("windowed_tokens_p90", round(combined_stats["p90"]))
                 report.add_metric("windowed_tokens_p99", round(combined_stats["p99"]))
-                report.add_metric(
-                    "windowed_pct_over_ctx", round(_pct_over(windowed_combined, args.ctx), 4)
-                )
+                report.add_metric("windowed_pct_over_ctx", round(_pct_over(windowed_combined, args.ctx), 4))
         except Exception as exc:  # noqa: BLE001
             report.warn("windowed dataset available", ok=False, detail=str(exc))
             payload["windowed_tokens"] = None
@@ -316,9 +316,21 @@ def main(argv: list[str] | None = None) -> int:
         except Exception as exc:  # noqa: BLE001
             report.add_check("history_days computed", False, detail=str(exc))
 
-    hist_all = history.get_column("history_days").to_numpy().astype(np.int64) if history.height else np.asarray([], dtype=np.int64)
-    cases = history.filter(pl.col("label") == 1).get_column("history_days").to_numpy().astype(np.int64) if history.height else np.asarray([], dtype=np.int64)
-    controls = history.filter(pl.col("label") == 0).get_column("history_days").to_numpy().astype(np.int64) if history.height else np.asarray([], dtype=np.int64)
+    hist_all = (
+        history.get_column("history_days").to_numpy().astype(np.int64)
+        if history.height
+        else np.asarray([], dtype=np.int64)
+    )
+    cases = (
+        history.filter(pl.col("label") == 1).get_column("history_days").to_numpy().astype(np.int64)
+        if history.height
+        else np.asarray([], dtype=np.int64)
+    )
+    controls = (
+        history.filter(pl.col("label") == 0).get_column("history_days").to_numpy().astype(np.int64)
+        if history.height
+        else np.asarray([], dtype=np.int64)
+    )
 
     payload["history_days"] = {
         "overall": _describe(hist_all),

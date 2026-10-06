@@ -46,28 +46,35 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--data-dir", default=str(paths.OMOP_DIR))
     parser.add_argument("--finetune-dir", default=str(paths.COHORT_FINETUNE_DIR))
     parser.add_argument("--test-dir", default=str(paths.COHORT_TEST_DIR))
-    parser.add_argument("--splits-file", default=str(paths.COHORT_SPLITS_FILE),
-                        help="Canonical train/val/test split file from step 6")
-    parser.add_argument("--prepared-dir", default=str(paths.FINETUNE_PREPARED_DIR),
-                        help="Fallback only: CEHR-BERT tokenized finetune dataset whose validation split defines val")
-    parser.add_argument("--output-dir", default=None,
-                        help="Features output dir (default: per-run features_dir for the run label)")
-    parser.add_argument("--window-days", type=int, default=paths.DEFAULT_WINDOW_DAYS,
-                        help="Look-back window in days; negative => unbounded (all history)")
-    parser.add_argument("--ctx", type=int, default=paths.DEFAULT_CTX,
-                        help="CEHR-BERT token cap; part of the run label")
+    parser.add_argument(
+        "--splits-file", default=str(paths.COHORT_SPLITS_FILE), help="Canonical train/val/test split file from step 6"
+    )
+    parser.add_argument(
+        "--prepared-dir",
+        default=str(paths.FINETUNE_PREPARED_DIR),
+        help="Fallback only: CEHR-BERT tokenized finetune dataset whose validation split defines val",
+    )
+    parser.add_argument(
+        "--output-dir", default=None, help="Features output dir (default: per-run features_dir for the run label)"
+    )
+    parser.add_argument(
+        "--window-days",
+        type=int,
+        default=paths.DEFAULT_WINDOW_DAYS,
+        help="Look-back window in days; negative => unbounded (all history)",
+    )
+    parser.add_argument("--ctx", type=int, default=paths.DEFAULT_CTX, help="CEHR-BERT token cap; part of the run label")
     parser.add_argument("--min-prevalence", type=float, default=bl.DEFAULT_MIN_PREVALENCE)
-    parser.add_argument("--report-dir", default=None,
-                        help="Report dir (default: per-run report dir for the run label)")
+    parser.add_argument("--report-dir", default=None, help="Report dir (default: per-run report dir for the run label)")
     args = parser.parse_args(argv)
 
     label = paths.run_label(args.window_days, args.ctx)
     out_dir = Path(args.output_dir) if args.output_dir else paths.features_dir(label)
-    report_dir = (Path(args.report_dir) if args.report_dir
-                  else paths.build_report_dir_for("11_prepare_baseline_features", label))
+    report_dir = (
+        Path(args.report_dir) if args.report_dir else paths.build_report_dir_for("11_prepare_baseline_features", label)
+    )
 
-    report = StepReport("11_prepare_baseline_features",
-                        title="Step 11 - Prepare baseline feature matrices")
+    report = StepReport("11_prepare_baseline_features", title="Step 11 - Prepare baseline feature matrices")
     data_dir = Path(args.data_dir).resolve()
     report.add_metric("run_label", label)
     report.add_metric("data_dir", str(data_dir))
@@ -78,39 +85,54 @@ def main(argv: list[str] | None = None) -> int:
     # --- recover the shared train/val/test partition -----------------------
     splits = bl.recover_splits(args.finetune_dir, args.test_dir, args.prepared_dir, splits_file=args.splits_file)
     report.add_metric("val_split_source", splits.val_source)
-    report.warn("splits taken from the canonical split file",
-                ok=splits.val_source == bl.CANONICAL_SPLITS_SOURCE,
-                detail=f"source={splits.val_source} (file: {args.splits_file})")
+    report.warn(
+        "splits taken from the canonical split file",
+        ok=splits.val_source == bl.CANONICAL_SPLITS_SOURCE,
+        detail=f"source={splits.val_source} (file: {args.splits_file})",
+    )
     for name, df in (("train", splits.train), ("val", splits.val), ("test", splits.test)):
         n_pos = int(df.filter(pl.col("label") == 1).height)
         report.add_metric(f"{name}_size", df.height)
         report.add_metric(f"{name}_positives", n_pos)
-        report.add_check(f"{name} split non-empty with both classes",
-                         df.height > 0 and 0 < n_pos < df.height,
-                         detail=f"{df.height} patients, {n_pos} positive")
+        report.add_check(
+            f"{name} split non-empty with both classes",
+            df.height > 0 and 0 < n_pos < df.height,
+            detail=f"{df.height} patients, {n_pos} positive",
+        )
 
     # no patient leaks across the three splits
     train_ids = set(splits.train.get_column("person_id").to_list())
     val_ids = set(splits.val.get_column("person_id").to_list())
     test_ids = set(splits.test.get_column("person_id").to_list())
     leak = (train_ids & val_ids) | (train_ids & test_ids) | (val_ids & test_ids)
-    report.add_check("train/val/test patient-disjoint", not leak,
-                     detail="ok" if not leak else f"{len(leak)} shared person_ids")
+    report.add_check(
+        "train/val/test patient-disjoint", not leak, detail="ok" if not leak else f"{len(leak)} shared person_ids"
+    )
 
     # --- extract counts + demographics per split ---------------------------
-    counts = {n: bl.build_counts(df, data_dir, args.window_days)
-              for n, df in (("train", splits.train), ("val", splits.val), ("test", splits.test))}
-    demo = {n: bl.build_demographics(df, data_dir)
-            for n, df in (("train", splits.train), ("val", splits.val), ("test", splits.test))}
+    counts = {
+        n: bl.build_counts(df, data_dir, args.window_days)
+        for n, df in (("train", splits.train), ("val", splits.val), ("test", splits.test))
+    }
+    demo = {
+        n: bl.build_demographics(df, data_dir)
+        for n, df in (("train", splits.train), ("val", splits.val), ("test", splits.test))
+    }
     # confound-control utilization features: record length + visit count
-    visit = {n: bl.build_visit_features(df, data_dir, args.window_days)
-             for n, df in (("train", splits.train), ("val", splits.val), ("test", splits.test))}
+    visit = {
+        n: bl.build_visit_features(df, data_dir, args.window_days)
+        for n, df in (("train", splits.train), ("val", splits.val), ("test", splits.test))
+    }
 
     # --- fit vocabulary on TRAIN, assemble every split ---------------------
     spec = bl.fit_feature_spec(
-        counts["train"], demo["train"], n_train=splits.train.height,
-        min_prevalence=args.min_prevalence, window_days=args.window_days,
-        domain_encoding=bl.DOMAIN_ENCODING, visit_features=visit["train"],
+        counts["train"],
+        demo["train"],
+        n_train=splits.train.height,
+        min_prevalence=args.min_prevalence,
+        window_days=args.window_days,
+        domain_encoding=bl.DOMAIN_ENCODING,
+        visit_features=visit["train"],
     )
     report.add_metric("n_code_features", len(spec.code_features))
     report.add_metric("n_features_total", len(spec.feature_names))
@@ -118,22 +140,24 @@ def main(argv: list[str] | None = None) -> int:
     report.add_metric("n_race_categories", len(spec.race_categories))
     report.add_metric("train_history_median", round(spec.history_median, 2))
     report.add_metric("train_nvisits_median", round(spec.nvisits_median, 2))
-    report.add_check("at least one code feature kept", len(spec.code_features) > 0,
-                     detail=f"{len(spec.code_features)} concepts >= {args.min_prevalence:.1%} train prevalence")
+    report.add_check(
+        "at least one code feature kept",
+        len(spec.code_features) > 0,
+        detail=f"{len(spec.code_features)} concepts >= {args.min_prevalence:.1%} train prevalence",
+    )
     bl.save_feature_spec(out_dir, spec)
 
     cohorts = {"train": splits.train, "val": splits.val, "test": splits.test}
     for name in ("train", "val", "test"):
-        X, y, pids, idates = bl.assemble_matrix(
-            cohorts[name], counts[name], demo[name], spec, visit=visit[name]
-        )
+        X, y, pids, idates = bl.assemble_matrix(cohorts[name], counts[name], demo[name], spec, visit=visit[name])
         bl.save_split(out_dir, name, X, y, pids, idates)
         cells = X.shape[0] * X.shape[1]
         density = X.nnz / cells if cells else 0.0
         report.add_metric(f"{name}_matrix_shape", f"{X.shape[0]}x{X.shape[1]}")
         report.add_metric(f"{name}_density", round(density, 5))
-        report.add_check(f"{name} matrix rows match cohort", X.shape[0] == cohorts[name].height,
-                         detail=f"{X.shape[0]} rows")
+        report.add_check(
+            f"{name} matrix rows match cohort", X.shape[0] == cohorts[name].height, detail=f"{X.shape[0]} rows"
+        )
         report.add_artifact(out_dir / f"{name}_X.npz")
 
     report.add_artifact(out_dir / "feature_spec.json")

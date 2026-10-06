@@ -53,9 +53,16 @@ from pipeline.reporting import StepReport  # noqa: E402
 EXCLUDED_TOKENS = frozenset({"[PAD]", "[CLS]", "[MASK]", "[UNUSED]", "[OOV]", "VS", "VE", "[VS]", "[VE]"})
 
 DATASET_FEATURE_KEYS = (
-    "input_ids", "ages", "dates", "visit_concept_orders",
-    "concept_values", "concept_value_masks", "visit_segments",
-    "age_at_index", "classifier_label", "person_id",
+    "input_ids",
+    "ages",
+    "dates",
+    "visit_concept_orders",
+    "concept_values",
+    "concept_value_masks",
+    "visit_segments",
+    "age_at_index",
+    "classifier_label",
+    "person_id",
 )
 
 
@@ -99,17 +106,28 @@ def _attribute_one(model, batch, device) -> tuple[dict[str, torch.Tensor], float
     """
     if batch["input_ids"].shape[1] <= 1:
         return None
-    inputs = {k: v.to(device) for k, v in batch.items() if k in (
-        "input_ids", "attention_mask", "ages", "dates", "visit_concept_orders",
-        "concept_values", "concept_value_masks", "visit_segments", "age_at_index",
-    )}
+    inputs = {
+        k: v.to(device)
+        for k, v in batch.items()
+        if k
+        in (
+            "input_ids",
+            "attention_mask",
+            "ages",
+            "dates",
+            "visit_concept_orders",
+            "concept_values",
+            "concept_value_masks",
+            "visit_segments",
+            "age_at_index",
+        )
+    }
     model.zero_grad(set_to_none=True)
     out = model(**inputs, output_attentions=True)
     if out.attentions is None:
         # Should not happen with attn_implementation="eager", but sdpa/flash return no
         # weights -- fail loud rather than crash with an opaque NoneType error downstream.
-        raise RuntimeError(
-            "model returned no attention weights; load with attn_implementation='eager'")
+        raise RuntimeError("model returned no attention weights; load with attn_implementation='eager'")
     # Retain grad on the attention probs so backward populates .grad on each layer.
     for a in out.attentions:
         a.retain_grad()
@@ -122,10 +140,7 @@ def _attribute_one(model, batch, device) -> tuple[dict[str, torch.Tensor], float
     # does not contribute to the logit; substitute zeros so the stack stays well-formed and
     # that layer simply gets zero relevance in grad-weighted rollout.
     grad_lhss = torch.stack(
-        [
-            (a.grad[0].detach().cpu() if a.grad is not None else torch.zeros_like(a[0]).cpu())
-            for a in out.attentions
-        ],
+        [(a.grad[0].detach().cpu() if a.grad is not None else torch.zeros_like(a[0]).cpu()) for a in out.attentions],
         dim=0,
     )
 
@@ -199,7 +214,7 @@ def _rank_correlation(df) -> dict:
 
     out = {}
     for i, a in enumerate(attn.METHODS):
-        for b in attn.METHODS[i + 1:]:
+        for b in attn.METHODS[i + 1 :]:
             rho, p = spearmanr(df[f"{a}_mean"], df[f"{b}_mean"])
             out[f"{a}_vs_{b}"] = {"spearman_rho": round(float(rho), 4), "p_value": float(p)}
     return out
@@ -213,8 +228,7 @@ def _plot_top_concepts(tops, n_pos, fig_path, top_k):
     import matplotlib.pyplot as plt
 
     fig, axes = plt.subplots(1, 3, figsize=(18, 0.45 * top_k + 1.5))
-    titles = {"raw": "Raw [CLS] attention", "rollout": "Attention rollout",
-              "gradxatt": "Gradient x attention"}
+    titles = {"raw": "Raw [CLS] attention", "rollout": "Attention rollout", "gradxatt": "Gradient x attention"}
     colors = {"raw": "#4C72B0", "rollout": "#55A868", "gradxatt": "#C44E52"}
     for ax, method in zip(axes, attn.METHODS):
         d = tops[method].iloc[::-1]  # largest at top
@@ -224,8 +238,10 @@ def _plot_top_concepts(tops, n_pos, fig_path, top_k):
         ax.set_yticklabels(labels, fontsize=8)
         ax.set_title(titles[method], fontsize=11)
         ax.set_xlabel("mean attribution per patient")
-    fig.suptitle(f"Top {top_k} concepts driving positive AD predictions "
-                 f"(predicted-positive patients, n={n_pos})", fontsize=13)
+    fig.suptitle(
+        f"Top {top_k} concepts driving positive AD predictions " f"(predicted-positive patients, n={n_pos})",
+        fontsize=13,
+    )
     fig.tight_layout(rect=(0, 0, 1, 0.97))
     Path(fig_path).parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(fig_path, dpi=300, bbox_inches="tight")
@@ -240,8 +256,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--prepared-dir", default=str(paths.PREDICT_PREPARED_DIR))
     parser.add_argument("--window-days", type=int, default=paths.DEFAULT_WINDOW_DAYS)
     parser.add_argument("--ctx", type=int, default=paths.DEFAULT_CTX)
-    parser.add_argument("--max-patients", type=int, default=None,
-                        help="Cap the number of test patients processed (default: all)")
+    parser.add_argument(
+        "--max-patients", type=int, default=None, help="Cap the number of test patients processed (default: all)"
+    )
     parser.add_argument("--top-k", type=int, default=20, help="Concepts shown per method in the figure")
     parser.add_argument("--device", default="cpu", help="torch device (cpu / cuda)")
     parser.add_argument("--output-dir", default=None)
@@ -251,8 +268,9 @@ def main(argv: list[str] | None = None) -> int:
     label = paths.run_label(args.window_days, args.ctx)
     output_dir = Path(args.output_dir) if args.output_dir else paths.run_dir(label) / "attention"
     fig_dir = paths.figures_dir(label)
-    report_dir = (Path(args.report_dir) if args.report_dir
-                  else paths.build_report_dir_for("14_attention_analysis", label))
+    report_dir = (
+        Path(args.report_dir) if args.report_dir else paths.build_report_dir_for("14_attention_analysis", label)
+    )
     output_dir.mkdir(parents=True, exist_ok=True)
 
     report = StepReport("14_attention_analysis", title="Step 14 - Attention-weight analysis")
@@ -262,13 +280,12 @@ def main(argv: list[str] | None = None) -> int:
 
     # --- preflight --------------------------------------------------------
     model_ok = report.add_check(
-        "fine-tuned model exists",
-        Path(args.model_dir, "config.json").is_file(), detail=args.model_dir)
+        "fine-tuned model exists", Path(args.model_dir, "config.json").is_file(), detail=args.model_dir
+    )
     tok_ok = report.add_check(
-        "tokenizer exists",
-        Path(args.tokenizer_dir, "tokenizer.json").is_file(), detail=args.tokenizer_dir)
-    prep_ok = report.add_check(
-        "prepared test data exists", Path(args.prepared_dir).is_dir(), detail=args.prepared_dir)
+        "tokenizer exists", Path(args.tokenizer_dir, "tokenizer.json").is_file(), detail=args.tokenizer_dir
+    )
+    prep_ok = report.add_check("prepared test data exists", Path(args.prepared_dir).is_dir(), detail=args.prepared_dir)
     if not (model_ok and tok_ok and prep_ok):
         report.note("Preflight failed. Run steps 6, 8 and 9 first.")
         return _finalize(report, report_dir)
@@ -282,12 +299,13 @@ def main(argv: list[str] | None = None) -> int:
 
     tokenizer = CehrBertTokenizer.from_pretrained(args.tokenizer_dir)
     model = CehrBertForClassification.from_pretrained(
-        args.model_dir, attn_implementation="eager", output_attentions=True)
+        args.model_dir, attn_implementation="eager", output_attentions=True
+    )
     model.to(args.device).eval()
     attn_impl = getattr(model.config, "_attn_implementation", "eager")
     if not report.add_check(
-        "eager attention active (flash/sdpa return no weights)",
-        attn_impl == "eager", detail=attn_impl):
+        "eager attention active (flash/sdpa return no weights)", attn_impl == "eager", detail=attn_impl
+    ):
         report.note("Attention weights are only emitted by the eager implementation.")
         return _finalize(report, report_dir)
 
@@ -302,7 +320,8 @@ def main(argv: list[str] | None = None) -> int:
     if not report.add_check(
         "dataset has age_at_index (required by classifier forward)",
         n_total > 0 and "age_at_index" in dataset[0],
-        detail=f"columns={list(dataset[0].keys())}" if n_total > 0 else "empty dataset"):
+        detail=f"columns={list(dataset[0].keys())}" if n_total > 0 else "empty dataset",
+    ):
         return _finalize(report, report_dir)
 
     collator = _build_collator(tokenizer, max_length)
@@ -343,7 +362,8 @@ def main(argv: list[str] | None = None) -> int:
             report.warn(f"{group} group non-empty", ok=False, detail="no patients in this group")
             continue
         csv_path, df, tops = _write_group_csv(
-            output_dir, group, acc[group], present[group], n_group, tokenizer, args.top_k)
+            output_dir, group, acc[group], present[group], n_group, tokenizer, args.top_k
+        )
         report.add_artifact(csv_path)
         if group == "pred_pos":
             pos_tops = tops
@@ -354,8 +374,7 @@ def main(argv: list[str] | None = None) -> int:
             for pair, vals in corr.items():
                 report.add_metric(f"spearman_{pair}", vals["spearman_rho"])
             top_concept = df.sort_values("gradxatt_mean", ascending=False).iloc[0]
-            report.add_metric("top_positive_concept",
-                              f"{top_concept['concept_name']} ({top_concept['concept_id']})")
+            report.add_metric("top_positive_concept", f"{top_concept['concept_name']} ({top_concept['concept_id']})")
 
     if pos_tops is not None:
         fig_path = fig_dir / "attention_top_concepts.png"

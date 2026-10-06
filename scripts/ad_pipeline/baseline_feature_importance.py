@@ -43,7 +43,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from pipeline import paths  # noqa: E402
 
-
 # Standard OMOP gender concept ids (kept un-obfuscated in the demographic features).
 GENDER_LABELS = {"8507": "Male", "8532": "Female"}
 
@@ -77,23 +76,27 @@ def _readable(feature: str, names: dict[str, str]) -> str:
 def _rank_lr(model_dir: Path, feature_names: list[str], names: dict[str, str]) -> pd.DataFrame:
     pipeline = joblib.load(model_dir / "model.joblib")
     coef = np.asarray(pipeline.named_steps["clf"].coef_).ravel()
-    df = pd.DataFrame({
-        "feature": feature_names,
-        "label": [_readable(f, names) for f in feature_names],
-        "coefficient": coef,
-        "abs_coefficient": np.abs(coef),
-    })
+    df = pd.DataFrame(
+        {
+            "feature": feature_names,
+            "label": [_readable(f, names) for f in feature_names],
+            "coefficient": coef,
+            "abs_coefficient": np.abs(coef),
+        }
+    )
     return df.sort_values("abs_coefficient", ascending=False).reset_index(drop=True)
 
 
 def _rank_xgb(model_dir: Path, feature_names: list[str], names: dict[str, str]) -> pd.DataFrame:
     model = joblib.load(model_dir / "model.joblib")
     importance = np.asarray(model.feature_importances_).ravel()
-    df = pd.DataFrame({
-        "feature": feature_names,
-        "label": [_readable(f, names) for f in feature_names],
-        "importance": importance,
-    })
+    df = pd.DataFrame(
+        {
+            "feature": feature_names,
+            "label": [_readable(f, names) for f in feature_names],
+            "importance": importance,
+        }
+    )
     return df.sort_values("importance", ascending=False).reset_index(drop=True)
 
 
@@ -101,13 +104,17 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Rank LR/XGBoost baseline feature importance")
     parser.add_argument("--window-days", type=int, default=paths.DEFAULT_WINDOW_DAYS)
     parser.add_argument("--ctx", type=int, default=paths.DEFAULT_CTX)
-    parser.add_argument("--baselines-dir", default=None,
-                        help="Override the baselines folder (default: per-run baselines_dir)")
+    parser.add_argument(
+        "--baselines-dir", default=None, help="Override the baselines folder (default: per-run baselines_dir)"
+    )
     parser.add_argument("--top", type=int, default=25, help="Rows to print to stdout per model")
-    parser.add_argument("--concept-table", default=None,
-                        help="Path to an OMOP CONCEPT parquet (concept_id, concept_name). "
-                             "Default: data/omop_data/concept/concept.parquet. Supply an Athena "
-                             "vocabulary table here for true descriptions.")
+    parser.add_argument(
+        "--concept-table",
+        default=None,
+        help="Path to an OMOP CONCEPT parquet (concept_id, concept_name). "
+        "Default: data/omop_data/concept/concept.parquet. Supply an Athena "
+        "vocabulary table here for true descriptions.",
+    )
     args = parser.parse_args(argv)
 
     label = paths.run_label(args.window_days, args.ctx)
@@ -123,8 +130,10 @@ def main(argv: list[str] | None = None) -> int:
     feature_names = json.loads(feature_names_path.read_text(encoding="utf-8"))
     concept_table = Path(args.concept_table) if args.concept_table else None
     names = _load_concept_names(concept_table)
-    print(f"Baselines: {baselines_dir}  |  {len(feature_names)} features  |  "
-          f"CONCEPT table: {'yes (' + str(len(names)) + ' codes)' if names else 'unavailable'}\n")
+    print(
+        f"Baselines: {baselines_dir}  |  {len(feature_names)} features  |  "
+        f"CONCEPT table: {'yes (' + str(len(names)) + ' codes)' if names else 'unavailable'}\n"
+    )
 
     for model_name, ranker in (("lr", _rank_lr), ("xgboost", _rank_xgb)):
         model_dir = baselines_dir / model_name
@@ -135,8 +144,10 @@ def main(argv: list[str] | None = None) -> int:
         out_path = model_dir / "feature_importance.csv"
         df.to_csv(out_path, index=False)
         score_col = "coefficient" if model_name == "lr" else "importance"
-        print(f"=== {model_name.upper()} top {args.top} (by "
-              f"{'|coefficient|' if model_name == 'lr' else 'importance'}) ===")
+        print(
+            f"=== {model_name.upper()} top {args.top} (by "
+            f"{'|coefficient|' if model_name == 'lr' else 'importance'}) ==="
+        )
         cols = ["feature", "label", score_col]
         print(df.head(args.top)[cols].to_string(index=False))
         print(f"-> full ranking written to {out_path}\n")

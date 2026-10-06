@@ -64,11 +64,15 @@ def load_cohort(folder: str | Path) -> pl.DataFrame:
     """Read a cohort folder (``*.parquet`` with person_id, index_date, label)."""
     folder = Path(folder)
     df = pl.read_parquet(str(folder / "*.parquet"))
-    return df.select(
-        pl.col("person_id").cast(pl.Int64),
-        pl.col("index_date").cast(pl.Date),
-        pl.col("label").cast(pl.Int64),
-    ).unique(subset="person_id").sort("person_id")
+    return (
+        df.select(
+            pl.col("person_id").cast(pl.Int64),
+            pl.col("index_date").cast(pl.Date),
+            pl.col("label").cast(pl.Int64),
+        )
+        .unique(subset="person_id")
+        .sort("person_id")
+    )
 
 
 def _val_person_ids_from_prepared(prepared_dir: str | Path) -> List[int]:
@@ -107,9 +111,7 @@ def _deterministic_val_ids(finetune: pl.DataFrame, val_fraction: float, seed: in
         return int(h[:8], 16) % 1_000_000
 
     threshold = int(val_fraction * 1_000_000)
-    with_bucket = finetune.with_columns(
-        pl.col("person_id").map_elements(_bucket, return_dtype=pl.Int64).alias("_b")
-    )
+    with_bucket = finetune.with_columns(pl.col("person_id").map_elements(_bucket, return_dtype=pl.Int64).alias("_b"))
     return with_bucket.filter(pl.col("_b") < threshold).get_column("person_id").to_list()
 
 
@@ -211,9 +213,7 @@ def build_counts(cohort: pl.DataFrame, data_dir: str | Path, window_days: int) -
             continue
         date_filter = pl.col("event_date") < pl.col("index_date")
         if not unbounded:
-            date_filter = date_filter & (
-                pl.col("event_date") >= pl.col("index_date") - pl.duration(days=window_days)
-            )
+            date_filter = date_filter & (pl.col("event_date") >= pl.col("index_date") - pl.duration(days=window_days))
         events = (
             pl.scan_parquet(glob)
             .select(
@@ -226,9 +226,7 @@ def build_counts(cohort: pl.DataFrame, data_dir: str | Path, window_days: int) -
             .filter(date_filter)
             .group_by("person_id", "concept_id")
             .agg(count=pl.len())
-            .with_columns(
-                feature=pl.format("{}:{}", pl.lit(prefix), pl.col("concept_id"))
-            )
+            .with_columns(feature=pl.format("{}:{}", pl.lit(prefix), pl.col("concept_id")))
             .select("person_id", "feature", pl.col("count").cast(pl.Int64))
         )
         parts.append(events)
@@ -287,10 +285,7 @@ def build_visit_features(cohort: pl.DataFrame, data_dir: str | Path, window_days
         .join(index.lazy(), on="person_id", how="inner")
         .select(
             "person_id",
-            (pl.col("index_date") - pl.col("earliest"))
-            .dt.total_days()
-            .cast(pl.Int64)
-            .alias("history_length_days"),
+            (pl.col("index_date") - pl.col("earliest")).dt.total_days().cast(pl.Int64).alias("history_length_days"),
         )
     )
 
@@ -300,10 +295,7 @@ def build_visit_features(cohort: pl.DataFrame, data_dir: str | Path, window_days
         nvisits_src = nvisits_src.filter(
             pl.col("visit_start_date") >= pl.col("index_date") - pl.duration(days=window_days)
         )
-    nvisits = (
-        nvisits_src.group_by("person_id")
-        .agg(n_visits=pl.col("visit_occurrence_id").n_unique().cast(pl.Int64))
-    )
+    nvisits = nvisits_src.group_by("person_id").agg(n_visits=pl.col("visit_occurrence_id").n_unique().cast(pl.Int64))
 
     return (
         index.select("person_id")
@@ -343,15 +335,15 @@ def build_demographics(cohort: pl.DataFrame, data_dir: str | Path) -> pl.DataFra
 class FeatureSpec:
     """Everything needed to turn raw counts+demographics into a fixed-width matrix."""
 
-    code_features: List[str]          # ordered "<domain>:<concept_id>" columns
+    code_features: List[str]  # ordered "<domain>:<concept_id>" columns
     gender_categories: List[int]
     race_categories: List[int]
     age_median: float
     min_prevalence: float
     window_days: int
-    domain_encoding: Dict[str, str]   # domain prefix -> "binary" | "count"
-    history_median: float = 0.0       # median history_length_days (confound control)
-    nvisits_median: float = 0.0       # median n_visits (confound control)
+    domain_encoding: Dict[str, str]  # domain prefix -> "binary" | "count"
+    history_median: float = 0.0  # median history_length_days (confound control)
+    nvisits_median: float = 0.0  # median n_visits (confound control)
 
     @property
     def feature_names(self) -> List[str]:
@@ -424,11 +416,17 @@ def fit_feature_spec(
 
     gender = (
         train_demo.filter(pl.col("gender_concept_id").is_not_null())
-        .get_column("gender_concept_id").unique().sort().to_list()
+        .get_column("gender_concept_id")
+        .unique()
+        .sort()
+        .to_list()
     )
     race = (
         train_demo.filter(pl.col("race_concept_id").is_not_null())
-        .get_column("race_concept_id").unique().sort().to_list()
+        .get_column("race_concept_id")
+        .unique()
+        .sort()
+        .to_list()
     )
     age_median = float(train_demo.get_column("age").median() or 0.0)
 
@@ -534,9 +532,7 @@ def assemble_matrix(
         history = np.full((n_rows, 1), float(spec.history_median), dtype=np.float64)
         n_visits = np.zeros((n_rows, 1), dtype=np.float64)
 
-    demo_block = sp.csr_matrix(
-        np.hstack([age, gender_oh, race_oh, history, n_visits])
-    )
+    demo_block = sp.csr_matrix(np.hstack([age, gender_oh, race_oh, history, n_visits]))
 
     X = sp.hstack([code_block, demo_block], format="csr")
     return X, y.astype(np.int64), person_ids, index_dates
@@ -545,13 +541,18 @@ def assemble_matrix(
 # --------------------------------------------------------------------------- #
 # Persistence
 # --------------------------------------------------------------------------- #
-def save_split(out_dir: str | Path, name: str, X: sp.csr_matrix, y: np.ndarray,
-               person_ids: np.ndarray, index_dates: np.ndarray) -> None:
+def save_split(
+    out_dir: str | Path, name: str, X: sp.csr_matrix, y: np.ndarray, person_ids: np.ndarray, index_dates: np.ndarray
+) -> None:
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
     sp.save_npz(out / f"{name}_X.npz", X)
-    np.savez(out / f"{name}_meta.npz", y=y, person_ids=person_ids,
-             index_dates=index_dates.astype("datetime64[D]").astype("int64"))
+    np.savez(
+        out / f"{name}_meta.npz",
+        y=y,
+        person_ids=person_ids,
+        index_dates=index_dates.astype("datetime64[D]").astype("int64"),
+    )
 
 
 def load_split(out_dir: str | Path, name: str) -> Tuple[sp.csr_matrix, np.ndarray, np.ndarray, np.ndarray]:

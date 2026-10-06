@@ -87,20 +87,33 @@ def evaluate_command(
     return [
         sys.executable,
         str(evaluate_script),
-        "--predictions", str(model_dir / "test_predictions"),
-        "--val-predictions", str(model_dir / "validation_predictions"),
-        "--results-dir", str(model_dir),
-        "--figures-dir", str(model_dir / "figures"),
-        "--report-dir", str(model_dir / "reports" / "10_evaluate"),
-        "--n-bootstrap", str(n_bootstrap),
-        "--seed", str(seed),
-        "--cal-bins", str(cal_bins),
+        "--predictions",
+        str(model_dir / "test_predictions"),
+        "--val-predictions",
+        str(model_dir / "validation_predictions"),
+        "--results-dir",
+        str(model_dir),
+        "--figures-dir",
+        str(model_dir / "figures"),
+        "--report-dir",
+        str(model_dir / "reports" / "10_evaluate"),
+        "--n-bootstrap",
+        str(n_bootstrap),
+        "--seed",
+        str(seed),
+        "--cal-bins",
+        str(cal_bins),
     ]
 
 
-def _evaluate_baseline(model: str, baselines_dir: Path, report: StepReport,
-                       n_bootstrap: int = EVAL_N_BOOTSTRAP, seed: int = EVAL_SEED,
-                       cal_bins: int = EVAL_CAL_BINS) -> None:
+def _evaluate_baseline(
+    model: str,
+    baselines_dir: Path,
+    report: StepReport,
+    n_bootstrap: int = EVAL_N_BOOTSTRAP,
+    seed: int = EVAL_SEED,
+    cal_bins: int = EVAL_CAL_BINS,
+) -> None:
     """Run 10_evaluate.py on one baseline's predictions; record success/failure."""
     model_dir = baselines_dir / model
     test_dir = model_dir / "test_predictions"
@@ -117,8 +130,7 @@ def _evaluate_baseline(model: str, baselines_dir: Path, report: StepReport,
     try:
         proc = subprocess.run(cmd, capture_output=True, text=True)
     except Exception as exc:  # noqa: BLE001
-        report.add_check(f"{model} evaluation succeeded", ok=False,
-                         detail=f"subprocess failed to launch: {exc}")
+        report.add_check(f"{model} evaluation succeeded", ok=False, detail=f"subprocess failed to launch: {exc}")
         return
 
     ok = proc.returncode == 0
@@ -188,27 +200,35 @@ def _extract_row(label: str, metrics: dict) -> dict:
 def _build_markdown(rows: list[dict]) -> str:
     """Render the per-model rows as a markdown pipe table plus a winner note."""
     header = (
-        "| Model | AUROC (95% CI) | AUPRC (95% CI) | Brier (95% CI) | ECE | "
-        "Cal. slope | Sens. | Spec. | PPV | F1 |"
+        "| Model | AUROC (95% CI) | AUPRC (95% CI) | Brier (95% CI) | ECE | " "Cal. slope | Sens. | Spec. | PPV | F1 |"
     )
     divider = "|" + "|".join(["---"] * 10) + "|"
-    lines = ["# Model comparison", "",
-             f"Operating point for sensitivity / specificity / PPV / F1: `{PRIMARY_METHOD}`.",
-             "", header, divider]
+    lines = [
+        "# Model comparison",
+        "",
+        f"Operating point for sensitivity / specificity / PPV / F1: `{PRIMARY_METHOD}`.",
+        "",
+        header,
+        divider,
+    ]
     for r in rows:
         lines.append(
-            "| " + " | ".join([
-                r["model"],
-                _fmt_ci(r["auroc"], r["auroc_ci95"]),
-                _fmt_ci(r["auprc"], r["auprc_ci95"]),
-                _fmt_ci(r["brier"], r["brier_ci95"]),
-                _fmt_num(r["ece"]),
-                _fmt_num(r["calibration_slope"], 2),
-                _fmt_num(r["sensitivity"]),
-                _fmt_num(r["specificity"]),
-                _fmt_num(r["ppv"]),
-                _fmt_num(r["f1"]),
-            ]) + " |"
+            "| "
+            + " | ".join(
+                [
+                    r["model"],
+                    _fmt_ci(r["auroc"], r["auroc_ci95"]),
+                    _fmt_ci(r["auprc"], r["auprc_ci95"]),
+                    _fmt_ci(r["brier"], r["brier_ci95"]),
+                    _fmt_num(r["ece"]),
+                    _fmt_num(r["calibration_slope"], 2),
+                    _fmt_num(r["sensitivity"]),
+                    _fmt_num(r["specificity"]),
+                    _fmt_num(r["ppv"]),
+                    _fmt_num(r["f1"]),
+                ]
+            )
+            + " |"
         )
 
     winner = _auroc_winner(rows)
@@ -271,8 +291,7 @@ def plot_overlaid_pr(curve_inputs: list[tuple], out_path: Path) -> Path:
         ax.plot(recall, precision, label=f"{label} (AUPRC={auprc:.3f})")
         prevalence = float(np.mean(y_true))
     if prevalence is not None:
-        ax.axhline(prevalence, linestyle="--", color="grey",
-                   label=f"baseline (prev={prevalence:.3f})")
+        ax.axhline(prevalence, linestyle="--", color="grey", label=f"baseline (prev={prevalence:.3f})")
     ax.set_xlabel("Recall (Sensitivity)")
     ax.set_ylabel("Precision (PPV)")
     ax.set_title("Precision-Recall curve comparison")
@@ -296,45 +315,61 @@ def _save_fig(fig, out_path: Path) -> Path:
 # --------------------------------------------------------------------------- #
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Compare baselines against CEHR-BERT")
-    parser.add_argument("--models", nargs="+", default=["lr", "xgboost"],
-                        help="Baseline model keys to evaluate and compare")
-    parser.add_argument("--window-days", type=int, default=paths.DEFAULT_WINDOW_DAYS,
-                        help="Look-back window in days; negative => unbounded (all history)")
-    parser.add_argument("--ctx", type=int, default=paths.DEFAULT_CTX,
-                        help="CEHR-BERT token cap; part of the run label")
-    parser.add_argument("--baselines-dir", default=None,
-                        help="Directory holding per-baseline prediction/metric folders "
-                             "(default: per-run baselines_dir for the run label)")
-    parser.add_argument("--cehrbert-metrics", default=None,
-                        help="Existing CEHR-BERT metrics.json "
-                             "(default: per-run eval_results_dir/metrics.json)")
-    parser.add_argument("--cehrbert-predictions", default=str(paths.TEST_PREDICTIONS_DIR),
-                        help="CEHR-BERT test predictions folder (for overlaid curves)")
-    parser.add_argument("--figures-dir", default=None,
-                        help="Where to save compare_roc.png / compare_pr.png "
-                             "(default: per-run figures_dir for the run label)")
-    parser.add_argument("--skip-eval", action="store_true",
-                        help="Skip re-running 10_evaluate; reuse existing metrics.json")
-    parser.add_argument("--n-bootstrap", type=int, default=EVAL_N_BOOTSTRAP,
-                        help="Passed to 10_evaluate.py; keep equal across models")
-    parser.add_argument("--seed", type=int, default=EVAL_SEED,
-                        help="Passed to 10_evaluate.py; keep equal across models")
-    parser.add_argument("--cal-bins", type=int, default=EVAL_CAL_BINS,
-                        help="Passed to 10_evaluate.py; keep equal across models")
-    parser.add_argument("--report-dir", default=None,
-                        help="Report dir (default: per-run report dir for the run label)")
+    parser.add_argument(
+        "--models", nargs="+", default=["lr", "xgboost"], help="Baseline model keys to evaluate and compare"
+    )
+    parser.add_argument(
+        "--window-days",
+        type=int,
+        default=paths.DEFAULT_WINDOW_DAYS,
+        help="Look-back window in days; negative => unbounded (all history)",
+    )
+    parser.add_argument("--ctx", type=int, default=paths.DEFAULT_CTX, help="CEHR-BERT token cap; part of the run label")
+    parser.add_argument(
+        "--baselines-dir",
+        default=None,
+        help="Directory holding per-baseline prediction/metric folders "
+        "(default: per-run baselines_dir for the run label)",
+    )
+    parser.add_argument(
+        "--cehrbert-metrics",
+        default=None,
+        help="Existing CEHR-BERT metrics.json " "(default: per-run eval_results_dir/metrics.json)",
+    )
+    parser.add_argument(
+        "--cehrbert-predictions",
+        default=str(paths.TEST_PREDICTIONS_DIR),
+        help="CEHR-BERT test predictions folder (for overlaid curves)",
+    )
+    parser.add_argument(
+        "--figures-dir",
+        default=None,
+        help="Where to save compare_roc.png / compare_pr.png " "(default: per-run figures_dir for the run label)",
+    )
+    parser.add_argument(
+        "--skip-eval", action="store_true", help="Skip re-running 10_evaluate; reuse existing metrics.json"
+    )
+    parser.add_argument(
+        "--n-bootstrap", type=int, default=EVAL_N_BOOTSTRAP, help="Passed to 10_evaluate.py; keep equal across models"
+    )
+    parser.add_argument(
+        "--seed", type=int, default=EVAL_SEED, help="Passed to 10_evaluate.py; keep equal across models"
+    )
+    parser.add_argument(
+        "--cal-bins", type=int, default=EVAL_CAL_BINS, help="Passed to 10_evaluate.py; keep equal across models"
+    )
+    parser.add_argument("--report-dir", default=None, help="Report dir (default: per-run report dir for the run label)")
     args = parser.parse_args(argv)
 
     label = paths.run_label(args.window_days, args.ctx)
     baselines_dir = Path(args.baselines_dir) if args.baselines_dir else paths.baselines_dir(label)
     figures_dir = Path(args.figures_dir) if args.figures_dir else paths.figures_dir(label)
-    cehrbert_metrics = (Path(args.cehrbert_metrics) if args.cehrbert_metrics
-                        else paths.eval_results_dir(label) / "metrics.json")
-    report_dir = (Path(args.report_dir) if args.report_dir
-                  else paths.build_report_dir_for("13_compare_models", label))
+    cehrbert_metrics = (
+        Path(args.cehrbert_metrics) if args.cehrbert_metrics else paths.eval_results_dir(label) / "metrics.json"
+    )
+    report_dir = Path(args.report_dir) if args.report_dir else paths.build_report_dir_for("13_compare_models", label)
 
-    report = StepReport("13_compare_models",
-                        title="Step 13 - Compare baselines vs CEHR-BERT")
+    report = StepReport("13_compare_models", title="Step 13 - Compare baselines vs CEHR-BERT")
     report.add_metric("run_label", label)
     report.add_metric("models", list(args.models))
     report.add_metric("baselines_dir", str(baselines_dir))
@@ -354,16 +389,16 @@ def main(argv: list[str] | None = None) -> int:
     ]
     for model in args.models:
         label = MODEL_LABELS.get(model, model)
-        sources.append((label, baselines_dir / model / "metrics.json",
-                        baselines_dir / model / "test_predictions"))
+        sources.append((label, baselines_dir / model / "metrics.json", baselines_dir / model / "test_predictions"))
 
     rows: list[dict] = []
     curve_inputs: list[tuple] = []
     for label, metrics_path, pred_dir in sources:
         metrics = _load_metrics(metrics_path)
         if metrics is None:
-            report.warn(f"{label} metrics available", ok=False,
-                        detail=f"missing or unreadable metrics.json at {metrics_path}")
+            report.warn(
+                f"{label} metrics available", ok=False, detail=f"missing or unreadable metrics.json at {metrics_path}"
+            )
             continue
         row = _extract_row(label, metrics)
         rows.append(row)
@@ -374,12 +409,15 @@ def main(argv: list[str] | None = None) -> int:
         if curve is not None:
             curve_inputs.append(curve)
         else:
-            report.warn(f"{label} test predictions usable for curves", ok=False,
-                        detail=f"no usable predictions at {pred_dir}")
+            report.warn(
+                f"{label} test predictions usable for curves", ok=False, detail=f"no usable predictions at {pred_dir}"
+            )
 
-    report.add_check("at least 2 models compared", ok=len(rows) >= 2,
-                     detail=f"{len(rows)} model(s) with metrics: "
-                            + ", ".join(r["model"] for r in rows))
+    report.add_check(
+        "at least 2 models compared",
+        ok=len(rows) >= 2,
+        detail=f"{len(rows)} model(s) with metrics: " + ", ".join(r["model"] for r in rows),
+    )
 
     # --- 3. comparison table (json + markdown) -----------------------------
     baselines_dir.mkdir(parents=True, exist_ok=True)
@@ -410,13 +448,14 @@ def main(argv: list[str] | None = None) -> int:
         except Exception as exc:  # noqa: BLE001
             report.warn("PR comparison figure written", ok=False, detail=str(exc)[:300])
     else:
-        report.warn("predictions available for overlaid curves", ok=False,
-                    detail="no model had usable test predictions; curves skipped")
+        report.warn(
+            "predictions available for overlaid curves",
+            ok=False,
+            detail="no model had usable test predictions; curves skipped",
+        )
 
-    report.add_check("ROC comparison figure written", ok=roc_ok,
-                     detail=str(figures_dir / "compare_roc.png"))
-    report.add_check("PR comparison figure written", ok=pr_ok,
-                     detail=str(figures_dir / "compare_pr.png"))
+    report.add_check("ROC comparison figure written", ok=roc_ok, detail=str(figures_dir / "compare_roc.png"))
+    report.add_check("PR comparison figure written", ok=pr_ok, detail=str(figures_dir / "compare_pr.png"))
 
     # --- 5. finalize --------------------------------------------------------
     report.write(report_dir)

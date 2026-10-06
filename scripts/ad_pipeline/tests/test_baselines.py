@@ -49,9 +49,7 @@ def test_recover_splits_reads_canonical_file(tmp_path):
     finetune_dir = _write_cohort(tmp_path / "finetune", _cohort([1, 2, 3, 4, 5, 6, 9]))
     test_dir = _write_cohort(tmp_path / "test", _cohort([10]))
 
-    splits = bl.recover_splits(
-        finetune_dir, test_dir, tmp_path / "no_prepared", splits_file=splits_file
-    )
+    splits = bl.recover_splits(finetune_dir, test_dir, tmp_path / "no_prepared", splits_file=splits_file)
 
     assert splits.val_source == "canonical_splits_file"
     assert splits.train["person_id"].to_list() == [1, 2, 3, 4]

@@ -90,13 +90,15 @@ def _baseline_table(csv_path: Path, score_col: str, codes: dict[str, str], top: 
     rows = []
     for rank, (_, r) in enumerate(df.iterrows(), 1):
         src = _source_code(r["feature"], codes)
-        rows.append({
-            "rank": rank,
-            "feature": r["feature"],
-            "source_code": src,
-            "description": _describe(src, r["feature"]),
-            score_col: round(float(r[score_col]), 5),
-        })
+        rows.append(
+            {
+                "rank": rank,
+                "feature": r["feature"],
+                "source_code": src,
+                "description": _describe(src, r["feature"]),
+                score_col: round(float(r[score_col]), 5),
+            }
+        )
     return pd.DataFrame(rows)
 
 
@@ -105,14 +107,16 @@ def _attention_table(csv_path: Path, codes: dict[str, str], top: int) -> pd.Data
     rows = []
     for rank, (_, r) in enumerate(df.iterrows(), 1):
         src = _source_code(r["concept_id"], codes)
-        rows.append({
-            "rank": rank,
-            "concept_id": r["concept_id"],
-            "source_code": src,
-            "description": _describe(src, str(r["concept_id"])),
-            "gradxatt_mean": round(float(r["gradxatt_mean"]), 5),
-            "pct_patients_present": round(float(r["pct_patients_present"]), 1),
-        })
+        rows.append(
+            {
+                "rank": rank,
+                "concept_id": r["concept_id"],
+                "source_code": src,
+                "description": _describe(src, str(r["concept_id"])),
+                "gradxatt_mean": round(float(r["gradxatt_mean"]), 5),
+                "pct_patients_present": round(float(r["pct_patients_present"]), 1),
+            }
+        )
     return pd.DataFrame(rows)
 
 
@@ -129,8 +133,7 @@ def main(argv: list[str] | None = None) -> int:
     out_dir = run / "feature_tables"
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    concept_table = Path(args.concept_table) if args.concept_table else (
-        paths.OMOP_DIR / "concept" / "concept.parquet")
+    concept_table = Path(args.concept_table) if args.concept_table else (paths.OMOP_DIR / "concept" / "concept.parquet")
     codes = _concept_lookup(concept_table)
 
     lr = _baseline_table(run / "baselines" / "lr" / "feature_importance.csv", "coefficient", codes, args.top)

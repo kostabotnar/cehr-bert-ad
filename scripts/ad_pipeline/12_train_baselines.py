@@ -71,13 +71,10 @@ def _build_lr_search(cv: StratifiedKFold) -> GridSearchCV:
         "clf__C": [0.001, 0.01, 0.1, 1.0, 10.0],
         "clf__class_weight": [None, "balanced"],
     }
-    return GridSearchCV(
-        pipe, grid, cv=cv, scoring="roc_auc", n_jobs=-1, refit=True
-    )
+    return GridSearchCV(pipe, grid, cv=cv, scoring="roc_auc", n_jobs=-1, refit=True)
 
 
-def _build_xgb_search(cv: StratifiedKFold, scale_pos_weight: float, n_iter: int,
-                      seed: int) -> RandomizedSearchCV:
+def _build_xgb_search(cv: StratifiedKFold, scale_pos_weight: float, n_iter: int, seed: int) -> RandomizedSearchCV:
     """XGBoost classifier + randomized search over the usual tree/boosting knobs."""
     base = XGBClassifier(
         tree_method="hist",
@@ -96,8 +93,14 @@ def _build_xgb_search(cv: StratifiedKFold, scale_pos_weight: float, n_iter: int,
         "gamma": [0, 0.5, 1.0],
     }
     return RandomizedSearchCV(
-        base, param_dist, n_iter=n_iter, cv=cv, scoring="roc_auc",
-        n_jobs=-1, refit=True, random_state=seed,
+        base,
+        param_dist,
+        n_iter=n_iter,
+        cv=cv,
+        scoring="roc_auc",
+        n_jobs=-1,
+        refit=True,
+        random_state=seed,
     )
 
 
@@ -123,12 +126,8 @@ def _write_model_outputs(
     """Persist predictions, the fitted estimator, and best_params; register artifacts."""
     model_dir.mkdir(parents=True, exist_ok=True)
 
-    test_pred = write_predictions(
-        model_dir / "test_predictions", test_pids, test_dates, y_test, prob_test
-    )
-    val_pred = write_predictions(
-        model_dir / "validation_predictions", val_pids, val_dates, y_val, prob_val
-    )
+    test_pred = write_predictions(model_dir / "test_predictions", test_pids, test_dates, y_test, prob_test)
+    val_pred = write_predictions(model_dir / "validation_predictions", val_pids, val_dates, y_val, prob_val)
 
     model_path = model_dir / "model.joblib"
     joblib.dump(estimator, model_path)
@@ -142,29 +141,34 @@ def _write_model_outputs(
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Train classical-ML baselines for the AD task")
-    parser.add_argument("--features-dir", default=None,
-                        help="Folder of {train,val,test}_X.npz / *_meta.npz from step 11 "
-                             "(default: per-run features_dir for the run label)")
-    parser.add_argument("--output-dir", default=None,
-                        help="Parent folder for lr/ and xgboost/ outputs "
-                             "(default: per-run baselines_dir for the run label)")
-    parser.add_argument("--window-days", type=int, default=paths.DEFAULT_WINDOW_DAYS,
-                        help="Look-back window in days; negative => unbounded (all history)")
-    parser.add_argument("--ctx", type=int, default=paths.DEFAULT_CTX,
-                        help="CEHR-BERT token cap; part of the run label")
+    parser.add_argument(
+        "--features-dir",
+        default=None,
+        help="Folder of {train,val,test}_X.npz / *_meta.npz from step 11 "
+        "(default: per-run features_dir for the run label)",
+    )
+    parser.add_argument(
+        "--output-dir",
+        default=None,
+        help="Parent folder for lr/ and xgboost/ outputs " "(default: per-run baselines_dir for the run label)",
+    )
+    parser.add_argument(
+        "--window-days",
+        type=int,
+        default=paths.DEFAULT_WINDOW_DAYS,
+        help="Look-back window in days; negative => unbounded (all history)",
+    )
+    parser.add_argument("--ctx", type=int, default=paths.DEFAULT_CTX, help="CEHR-BERT token cap; part of the run label")
     parser.add_argument("--cv-folds", type=int, default=5)
-    parser.add_argument("--xgb-iter", type=int, default=30,
-                        help="Number of RandomizedSearchCV samples for XGBoost")
+    parser.add_argument("--xgb-iter", type=int, default=30, help="Number of RandomizedSearchCV samples for XGBoost")
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--report-dir", default=None,
-                        help="Report dir (default: per-run report dir for the run label)")
+    parser.add_argument("--report-dir", default=None, help="Report dir (default: per-run report dir for the run label)")
     args = parser.parse_args(argv)
 
     label = paths.run_label(args.window_days, args.ctx)
     features_dir = Path(args.features_dir) if args.features_dir else paths.features_dir(label)
     output_dir = Path(args.output_dir) if args.output_dir else paths.baselines_dir(label)
-    report_dir = (Path(args.report_dir) if args.report_dir
-                  else paths.build_report_dir_for("12_train_baselines", label))
+    report_dir = Path(args.report_dir) if args.report_dir else paths.build_report_dir_for("12_train_baselines", label)
 
     report = StepReport("12_train_baselines", title="Step 12 - Train classical-ML baselines")
     report.add_metric("run_label", label)
@@ -175,9 +179,11 @@ def main(argv: list[str] | None = None) -> int:
     report.add_metric("seed", args.seed)
 
     # --- load the three splits --------------------------------------------
-    if not report.add_check("feature matrices exist",
-                            features_dir.is_dir() and (features_dir / "train_X.npz").exists(),
-                            detail=str(features_dir)):
+    if not report.add_check(
+        "feature matrices exist",
+        features_dir.is_dir() and (features_dir / "train_X.npz").exists(),
+        detail=str(features_dir),
+    ):
         return _finalize(report, report_dir)
 
     X_train, y_train, train_pids, train_dates = bl.load_split(features_dir, "train")
@@ -192,10 +198,13 @@ def main(argv: list[str] | None = None) -> int:
         report.add_metric(f"{name}_positives", int(np.sum(y)))
 
     splits_ok = _both_classes(y_train) and _both_classes(y_val) and _both_classes(y_test)
-    if not report.add_check("all splits non-empty with both classes", splits_ok,
-                            detail=f"train={len(y_train)}/{int(np.sum(y_train))}+ "
-                                   f"val={len(y_val)}/{int(np.sum(y_val))}+ "
-                                   f"test={len(y_test)}/{int(np.sum(y_test))}+"):
+    if not report.add_check(
+        "all splits non-empty with both classes",
+        splits_ok,
+        detail=f"train={len(y_train)}/{int(np.sum(y_train))}+ "
+        f"val={len(y_val)}/{int(np.sum(y_val))}+ "
+        f"test={len(y_test)}/{int(np.sum(y_test))}+",
+    ):
         return _finalize(report, report_dir)
 
     cv = StratifiedKFold(n_splits=args.cv_folds, shuffle=True, random_state=args.seed)
@@ -216,14 +225,21 @@ def main(argv: list[str] | None = None) -> int:
     report.add_metric("lr_val_auprc", round(lr_val_auprc, 4))
     report.add_metric("lr_test_auroc", round(lr_test_auroc, 4))
     report.add_metric("lr_test_auprc", round(lr_test_auprc, 4))
-    report.warn("lr test AUROC above 0.5 floor", ok=lr_test_auroc > 0.5,
-                detail=f"AUROC={lr_test_auroc:.4f}")
+    report.warn("lr test AUROC above 0.5 floor", ok=lr_test_auroc > 0.5, detail=f"AUROC={lr_test_auroc:.4f}")
 
     _write_model_outputs(
-        report, output_dir / "lr", lr_model,
+        report,
+        output_dir / "lr",
+        lr_model,
         {"best_params": lr_search.best_params_, "cv_best_auroc": float(lr_search.best_score_)},
-        test_pids, test_dates, y_test, lr_prob_test,
-        val_pids, val_dates, y_val, lr_prob_val,
+        test_pids,
+        test_dates,
+        y_test,
+        lr_prob_test,
+        val_pids,
+        val_dates,
+        y_val,
+        lr_prob_val,
     )
 
     # --- XGBoost ----------------------------------------------------------
@@ -263,18 +279,25 @@ def main(argv: list[str] | None = None) -> int:
     report.add_metric("xgb_val_auprc", round(xgb_val_auprc, 4))
     report.add_metric("xgb_test_auroc", round(xgb_test_auroc, 4))
     report.add_metric("xgb_test_auprc", round(xgb_test_auprc, 4))
-    report.warn("xgb test AUROC above 0.5 floor", ok=xgb_test_auroc > 0.5,
-                detail=f"AUROC={xgb_test_auroc:.4f}")
+    report.warn("xgb test AUROC above 0.5 floor", ok=xgb_test_auroc > 0.5, detail=f"AUROC={xgb_test_auroc:.4f}")
 
     _write_model_outputs(
-        report, output_dir / "xgboost", xgb_model,
+        report,
+        output_dir / "xgboost",
+        xgb_model,
         {
             "best_params": xgb_search.best_params_,
             "cv_best_auroc": float(xgb_search.best_score_),
             "best_iteration": int(best_iteration) if best_iteration is not None else None,
         },
-        test_pids, test_dates, y_test, xgb_prob_test,
-        val_pids, val_dates, y_val, xgb_prob_val,
+        test_pids,
+        test_dates,
+        y_test,
+        xgb_prob_test,
+        val_pids,
+        val_dates,
+        y_val,
+        xgb_prob_val,
     )
 
     return _finalize(report, report_dir)
