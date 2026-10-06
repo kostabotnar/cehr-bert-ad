@@ -63,11 +63,16 @@ def test_step03_evaluate_pretrain_config(step, pretrain_config, tmp_path):
 
 
 def test_step05_verify_pretraining(step, model_dir, prepared_dataset, tmp_path):
+    import polars as pl
+
     mod = step("05_verify_pretraining.py")
     rep = tmp_path / "rep05"
+    splits = tmp_path / "splits.parquet"
+    pl.DataFrame({"person_id": [1, 5, 9], "split": ["train", "val", "test"]}).write_parquet(splits)
     rc = mod.main([
         "--results-dir", str(model_dir),
         "--prepared-dir", str(prepared_dataset),
+        "--splits-file", str(splits),
         "--report-dir", str(rep),
     ])
     # Model + train_results pass; prepared-dataset content check may warn without datasets.

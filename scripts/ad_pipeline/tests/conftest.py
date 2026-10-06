@@ -257,3 +257,91 @@ def finetune_config(tmp_path: Path, model_dir: Path, fake_tokenized_dataset: Pat
     path = tmp_path / "finetune.yaml"
     path.write_text(yaml.safe_dump(cfg), encoding="utf-8")
     return path
+
+
+# --------------------------------------------------------------------------
+# Spark-style patient_sequence folder (same schema as cehrbert_data writes)
+# --------------------------------------------------------------------------
+def _sequence_record(person_id: int, n_visits: int) -> dict:
+    concepts = ["year:2010", "age:60", "8507" if person_id % 2 else "8532", "8527"] if n_visits else []
+    for v in range(n_visits):
+        concepts += ["[VS]", "9201", f"c{(person_id * 7 + v) % 11}", "[VE]"]
+        if v < n_visits - 1:
+            concepts.append(f"W{v % 3}")
+    n = len(concepts)
+    head = min(n, 4)
+    return {
+        "cohort_member_id": person_id,
+        "person_id": person_id,
+        "concept_ids": concepts,
+        "visit_segments": [0] * head + [1 + (i // 5) % 2 for i in range(n - head)],
+        "orders": list(range(n)),
+        "dates": [0] * head + [2100 + i for i in range(n - head)],
+        "ages": [-1] * head + [60 + i // 5 for i in range(n - head)],
+        "visit_concept_orders": [0] * head + [1 + i // 5 for i in range(n - head)],
+        "num_of_visits": n_visits,
+        "num_of_concepts": n,
+        "concept_value_masks": [0] * n,
+        "number_as_values": [float("nan")] * n,
+        "concept_as_values": [None] * n,
+        "is_numeric_types": [0] * n,
+        "mlm_skip_values": [0] * n,
+        "priorities": [0.0] * n,
+        "visit_concept_ids": [9201] * n,
+        "visit_rank_orders": [0] * n,
+        "concept_orders": list(range(n)),
+        "record_ranks": list(range(n)),
+        "units": [None] * n,
+        "epoch_times": [0] * head + [(2100 + i) * 7 * 86400 for i in range(n - head)],
+    }
+
+
+SEQUENCE_SCHEMA_FIELDS = [
+    ("cohort_member_id", "int64", True), ("person_id", "int64", True),
+    ("concept_ids", "string", False), ("visit_segments", "int32", False), ("orders", "int32", False),
+    ("dates", "int32", False), ("ages", "int64", False), ("visit_concept_orders", "int32", False),
+    ("num_of_visits", "int32", True), ("num_of_concepts", "int64", None),
+    ("concept_value_masks", "int32", False), ("number_as_values", "float64", False),
+    ("concept_as_values", "string", False), ("is_numeric_types", "int32", False),
+    ("mlm_skip_values", "int32", False), ("priorities", "float64", False),
+    ("visit_concept_ids", "int64", False), ("visit_rank_orders", "int32", False),
+    ("concept_orders", "int32", False), ("record_ranks", "int32", False),
+    ("units", "string", False), ("epoch_times", "int64", False),
+]  # fmt: skip
+
+
+def write_spark_sequences(folder: Path, persons_per_file: list[list[int]], n_visits=None) -> Path:
+    """Write a Spark-like patient_sequence folder: part files, snappy, Spark schema metadata, _SUCCESS.
+
+    The third field entry is True for a nullable scalar, None for a non-null scalar and False
+    for a non-null list column, as in the files cehrbert_data writes.
+    """
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    fields = []
+    for name, typ, kind in SEQUENCE_SCHEMA_FIELDS:
+        arrow_type = getattr(pa, typ)()
+        if kind is False:
+            fields.append(pa.field(name, pa.list_(arrow_type), nullable=False))
+        else:
+            fields.append(pa.field(name, arrow_type, nullable=bool(kind)))
+    schema = pa.schema(fields, metadata={b"org.apache.spark.version": b"3.1.2"})
+    folder.mkdir(parents=True, exist_ok=True)
+    n_visits = n_visits or {}
+    for i, persons in enumerate(persons_per_file):
+        rows = [_sequence_record(p, n_visits.get(p, 2 + p % 4)) for p in persons]
+        table = pa.Table.from_pylist(rows, schema=schema)
+        pq.write_table(table, folder / f"part-{i:05d}-abc-c000.snappy.parquet", compression="snappy")
+    (folder / "_SUCCESS").write_text("", encoding="utf-8")
+    return folder
+
+
+@pytest.fixture
+def spark_sequences(tmp_path: Path) -> Path:
+    """Persons 1..12 over three part files; person 12 has an empty sequence (num_of_concepts 0)."""
+    return write_spark_sequences(
+        tmp_path / "cehrbert_data" / "patient_sequence",
+        [[1, 2, 3, 4], [5, 6, 7, 8], [9, 10, 11, 12]],
+        n_visits={12: 0},
+    )
