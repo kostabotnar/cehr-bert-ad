@@ -28,12 +28,14 @@ def write_predictions(
         shutil.rmtree(out)
     out.mkdir(parents=True, exist_ok=True)
 
+    n = len(person_ids)
     df = pd.DataFrame(
         {
             "subject_id": np.asarray(person_ids).astype("int64"),
             "prediction_time": pd.to_datetime(np.asarray(index_dates)),
             "predicted_boolean_probability": np.asarray(y_prob, dtype=float),
-            "predicted_boolean_value": (np.asarray(y_prob, dtype=float) >= 0.5),
+            # Left null like the finetune runner's output: thresholds are chosen in step 10.
+            "predicted_boolean_value": pd.array([pd.NA] * n, dtype="boolean"),
             "boolean_value": np.asarray(y_true).astype(bool),
         }
     )

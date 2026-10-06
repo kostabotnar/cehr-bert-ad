@@ -66,16 +66,44 @@ CEHRBERT_LABEL = "CEHR-BERT"
 # Operating point reported in the comparison table (matches 10_evaluate's headline).
 PRIMARY_METHOD = "youden"
 
+# Every model must be scored with the same 10_evaluate.py arguments; pass them explicitly
+# so a change to 10_evaluate's defaults cannot silently make the baselines incomparable.
+EVAL_N_BOOTSTRAP = 2000
+EVAL_SEED = 42
+EVAL_CAL_BINS = 10
+
 
 # --------------------------------------------------------------------------- #
 # Subprocess evaluation
 # --------------------------------------------------------------------------- #
-def _evaluate_baseline(model: str, baselines_dir: Path, report: StepReport) -> None:
+def evaluate_command(
+    model_dir: Path,
+    n_bootstrap: int = EVAL_N_BOOTSTRAP,
+    seed: int = EVAL_SEED,
+    cal_bins: int = EVAL_CAL_BINS,
+) -> list[str]:
+    """Command line that runs 10_evaluate.py on one baseline's prediction folders."""
+    evaluate_script = Path(__file__).resolve().parent / "10_evaluate.py"
+    return [
+        sys.executable,
+        str(evaluate_script),
+        "--predictions", str(model_dir / "test_predictions"),
+        "--val-predictions", str(model_dir / "validation_predictions"),
+        "--results-dir", str(model_dir),
+        "--figures-dir", str(model_dir / "figures"),
+        "--report-dir", str(model_dir / "reports" / "10_evaluate"),
+        "--n-bootstrap", str(n_bootstrap),
+        "--seed", str(seed),
+        "--cal-bins", str(cal_bins),
+    ]
+
+
+def _evaluate_baseline(model: str, baselines_dir: Path, report: StepReport,
+                       n_bootstrap: int = EVAL_N_BOOTSTRAP, seed: int = EVAL_SEED,
+                       cal_bins: int = EVAL_CAL_BINS) -> None:
     """Run 10_evaluate.py on one baseline's predictions; record success/failure."""
     model_dir = baselines_dir / model
     test_dir = model_dir / "test_predictions"
-    val_dir = model_dir / "validation_predictions"
-    evaluate_script = Path(__file__).resolve().parent / "10_evaluate.py"
 
     if not (test_dir.is_dir() and any(test_dir.glob("*.parquet"))):
         report.warn(
@@ -85,15 +113,7 @@ def _evaluate_baseline(model: str, baselines_dir: Path, report: StepReport) -> N
         )
         return
 
-    cmd = [
-        sys.executable,
-        str(evaluate_script),
-        "--predictions", str(test_dir),
-        "--val-predictions", str(val_dir),
-        "--results-dir", str(model_dir),
-        "--figures-dir", str(model_dir / "figures"),
-        "--report-dir", str(model_dir / "reports" / "10_evaluate"),
-    ]
+    cmd = evaluate_command(model_dir, n_bootstrap, seed, cal_bins)
     try:
         proc = subprocess.run(cmd, capture_output=True, text=True)
     except Exception as exc:  # noqa: BLE001
@@ -295,6 +315,12 @@ def main(argv: list[str] | None = None) -> int:
                              "(default: per-run figures_dir for the run label)")
     parser.add_argument("--skip-eval", action="store_true",
                         help="Skip re-running 10_evaluate; reuse existing metrics.json")
+    parser.add_argument("--n-bootstrap", type=int, default=EVAL_N_BOOTSTRAP,
+                        help="Passed to 10_evaluate.py; keep equal across models")
+    parser.add_argument("--seed", type=int, default=EVAL_SEED,
+                        help="Passed to 10_evaluate.py; keep equal across models")
+    parser.add_argument("--cal-bins", type=int, default=EVAL_CAL_BINS,
+                        help="Passed to 10_evaluate.py; keep equal across models")
     parser.add_argument("--report-dir", default=None,
                         help="Report dir (default: per-run report dir for the run label)")
     args = parser.parse_args(argv)
@@ -312,13 +338,14 @@ def main(argv: list[str] | None = None) -> int:
     report.add_metric("run_label", label)
     report.add_metric("models", list(args.models))
     report.add_metric("baselines_dir", str(baselines_dir))
+    report.add_metric("eval_args", {"n_bootstrap": args.n_bootstrap, "seed": args.seed, "cal_bins": args.cal_bins})
 
     # --- 1. evaluate each baseline (unless skipped) ------------------------
     if args.skip_eval:
         report.note("--skip-eval set: reusing existing metrics.json for each baseline")
     else:
         for model in args.models:
-            _evaluate_baseline(model, baselines_dir, report)
+            _evaluate_baseline(model, baselines_dir, report, args.n_bootstrap, args.seed, args.cal_bins)
 
     # --- 2. load all metrics.json ------------------------------------------
     # (label, metrics_path, test_pred_dir)
