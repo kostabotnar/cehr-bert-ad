@@ -367,21 +367,35 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--results-dir",
         default=str(paths.FINETUNE_RESULTS_DIR),
-        help="Where predictions/metrics are written (must match the derived output_dir)",
+        help="Where validation predictions/metrics are written (must match the derived output_dir)",
     )
-    parser.add_argument("--report-dir", default=str(paths.build_report_dir_for("10a_validation_predictions")))
+    parser.add_argument("--window-days", type=int, default=paths.DEFAULT_WINDOW_DAYS,
+                        help="Look-back window in days for the run label (negative = all history).")
+    parser.add_argument("--ctx", type=int, default=paths.DEFAULT_CTX,
+                        help="Token context for the run label.")
+    parser.add_argument("--report-dir", default=None,
+                        help="Override report dir; defaults to build/<run_label>/reports/10a_validation_predictions.")
     args = parser.parse_args(argv)
+
+    # Build report nests under build/<run_label>/; an explicit override still wins.
+    # (validation_predictions themselves stay under data/finetune_results -- unchanged.)
+    label = paths.run_label(args.window_days, args.ctx)
+    report_dir = (
+        Path(args.report_dir) if args.report_dir
+        else paths.build_report_dir_for("10a_validation_predictions", label)
+    )
 
     report = StepReport(
         "10a_validation_predictions",
         title="Step 10a - Validation-split predictions for unbiased thresholding",
     )
+    report.add_metric("run_label", label)
     report.add_metric("finetune_config", args.finetune_config)
 
     # 1. Load fine-tuning config and derive the validation predict config.
     finetune_cfg = load_yaml(Path(args.finetune_config))
     predict_cfg = build_validation_predict_config(finetune_cfg)
-    derived_config_path = write_config(predict_cfg, Path(args.report_dir) / "validation_predict_config.yaml")
+    derived_config_path = write_config(predict_cfg, report_dir / "validation_predict_config.yaml")
     report.add_artifact(derived_config_path)
 
     # 2. Parse the derived config with cehrbert's parser. parse_runner_args reads a single
@@ -390,7 +404,7 @@ def main(argv: list[str] | None = None) -> int:
         from cehrbert.runners.runner_util import parse_runner_args
     except Exception as exc:
         report.add_check("cehrbert importable", False, detail=f"{type(exc).__name__}: {exc}")
-        return _finalize(report, args.report_dir)
+        return _finalize(report, report_dir)
     report.add_check("cehrbert importable", True)
 
     saved_argv = sys.argv
@@ -406,7 +420,7 @@ def main(argv: list[str] | None = None) -> int:
     # 4. Preflight checks.
     if not _preflight(report, prepared_ds_path, model_args, training_args):
         report.note("Preflight failed; not running validation prediction. Run step 8 (fine-tuning) first.")
-        return _finalize(report, args.report_dir)
+        return _finalize(report, report_dir)
 
     # 5-7. Run the inference loop (mirrors do_predict) and write outputs.
     try:
@@ -415,14 +429,14 @@ def main(argv: list[str] | None = None) -> int:
         )
     except Exception as exc:
         report.add_check("validation prediction ran", False, detail=f"{type(exc).__name__}: {exc}")
-        return _finalize(report, args.report_dir)
+        return _finalize(report, report_dir)
     report.add_check("validation prediction ran", True)
 
     # 8. Verify outputs.
     report.add_metric("results_dir", args.results_dir)
     _add_output_checks(report, val_prediction_folder, Path(args.results_dir))
 
-    return _finalize(report, args.report_dir)
+    return _finalize(report, report_dir)
 
 
 def _finalize(report: StepReport, report_dir: str) -> int:
