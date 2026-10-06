@@ -20,7 +20,12 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from pipeline import launch, paths  # noqa: E402
-from pipeline.omop_validation import add_dataset_checks, count_rows, table_glob  # noqa: E402
+from pipeline.omop_validation import (  # noqa: E402
+    add_dataset_checks,
+    add_visit_datetime_check,
+    count_rows,
+    table_glob,
+)
 from pipeline.reporting import StepReport  # noqa: E402
 
 WRAPPER = Path(__file__).resolve().parent / "02_generate_pretraining_data.sh"
@@ -46,8 +51,9 @@ def main(argv: list[str] | None = None) -> int:
 
     # --- preflight: the Spark job reads these OMOP tables ------------------
     add_dataset_checks(report, input_folder, require_concept=True)
+    add_visit_datetime_check(report, input_folder)
     if not report.passed:
-        report.note("Preflight failed; not launching Spark job. Fix dataset issues (see step 1).")
+        report.note("Preflight failed; not launching Spark job. Fix dataset issues (see steps 1 and 1b).")
         return _finalize(report, args.report_dir)
 
     # --- launch ------------------------------------------------------------
