@@ -1,10 +1,12 @@
 #!/usr/bin/env python
 """Step 4: Pretrain the CEHR-BERT model.
 
-Preflight-checks the patient sequences and the pretraining config (reusing step 3's
-validation), launches the cehrbert pretraining runner via the thin ``04_pretrain.sh``
-wrapper, then sanity-checks that a model directory was produced. Full verification is
-step 5.
+Preflight-checks the pretraining config (reusing step 3's validation), that its
+``data_folder`` (``patient_sequence_pretrain`` from step 3b) holds no person of the step 6 test
+split, and that no prepared dataset, tokenizer, model config or checkpoint the runner would
+silently reuse is older than that input. Then launches the cehrbert pretraining runner via the
+thin ``04_pretrain.sh`` wrapper and sanity-checks that a model directory was produced. Full
+verification is step 5.
 
 Usage:
     python 04_pretrain.py
@@ -20,6 +22,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from pipeline import launch, paths  # noqa: E402
+from pipeline import pretrain_data as pd_  # noqa: E402
 from pipeline.config_validation import add_pretrain_config_checks, load_yaml, write_config  # noqa: E402
 from pipeline.reporting import StepReport  # noqa: E402
 
@@ -45,6 +48,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--skip-launch", action="store_true", help="Run preflight only; do not launch training")
     parser.add_argument("--report-dir", default=str(paths.report_dir_for("04_pretrain")))
     parser.add_argument(
+        "--splits-file",
+        default=str(paths.COHORT_SPLITS_FILE),
+        help="Canonical splits (step 6); its test persons must not be in the pretraining input",
+    )
+    parser.add_argument(
         "--max-position-embeddings", "--ctx", type=int, default=None, dest="max_position_embeddings",
         help="Override the token context (max_position_embeddings / sample_packing_max_positions); "
              "default uses the YAML value.")
@@ -53,16 +61,33 @@ def main(argv: list[str] | None = None) -> int:
     report = StepReport("04_pretrain", title="Step 4 — Pretrain CEHR-BERT")
     report.add_metric("config", args.config)
 
-    # --- preflight: sequences present + config valid ----------------------
-    seq_dir = paths.PATIENT_SEQUENCE_DIR
-    if not report.add_check("patient_sequence present", seq_dir.is_dir() and any(seq_dir.glob("*.parquet")),
-                            detail=str(seq_dir)):
-        report.note("Run step 2 first to generate patient sequences.")
-        return _finalize(report, args.report_dir)
-
+    # --- preflight: config valid, input excludes test persons, nothing stale reused ----
     add_pretrain_config_checks(report, Path(args.config), paths.resolve_under_root)
     if not report.passed:
         report.note("Config preflight failed; not launching training (see step 3).")
+        return _finalize(report, args.report_dir)
+
+    data_folder = paths.resolve_under_root(load_yaml(Path(args.config))["data_folder"])
+    if not report.add_check("splits file exists", Path(args.splits_file).is_file(), detail=args.splits_file):
+        report.note("Run step 6, then step 3b, before pretraining.")
+        return _finalize(report, args.report_dir)
+    test_ids = pd_.split_person_ids(args.splits_file, "test")
+    leaked = test_ids & pd_.sequence_person_ids(data_folder, require_concepts=False)
+    if not report.add_check(
+        "pretraining input holds no test person",
+        not leaked,
+        detail=f"{len(leaked)} of {len(test_ids)} test persons in {data_folder}",
+    ):
+        report.note("Point data_folder at the output of step 3b (03b_build_pretraining_input.py).")
+        return _finalize(report, args.report_dir)
+
+    stale = pd_.stale_pretrain_artifacts(Path(args.config), paths.resolve_under_root)
+    if not report.add_check(
+        "no stale pretraining artifacts",
+        not stale,
+        detail="ok" if not stale else "older than the input: " + ", ".join(map(str, stale)),
+    ):
+        report.note("The runner would reuse these instead of rebuilding them; move or delete them first.")
         return _finalize(report, args.report_dir)
 
     paths.PRETRAIN_PREPARED_DIR.mkdir(parents=True, exist_ok=True)

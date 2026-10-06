@@ -112,7 +112,7 @@ def build_split_dataset(split_df, work_dir: str | Path, config_path: str | Path,
     """Window and label one canonical split with cehrbert's ``extract_cohort_sequences``.
 
     The split is written to its own cohort folder (person_id, index_date, label). The
-    function keeps the pretraining train/validation assignment of each patient, so the
+    function keeps the train/validation assignment of each patient in the tokenized dataset, so the
     returned splits are concatenated into one dataset, as the fine-tune runner does for
     predict-only runs.
     """

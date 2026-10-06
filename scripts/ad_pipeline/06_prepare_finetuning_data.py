@@ -20,13 +20,17 @@ like "ICD-10-CM:G30.9". condition_concept_id holds standard SNOMED ids, and the 
 table uses plain codes (vocabulary ICD10CM, concept_code "G30.9"), so neither can be
 matched against the "ICD-10-CM:" strings.
 
-A final step intersects the cohort with the person_ids present in the tokenized
-pretraining dataset (data/pretrain_prepared); patients without a usable sequence would
-otherwise make step 8 fail. Skip with --skip-tokenized-check (e.g. before pretraining).
+A final step keeps only patients with a usable sequence; the others would make step 8 fail.
+``--intersect-with`` picks the source of the person_ids:
+  * ``sequences`` (default): the raw sequences of step 2 (data/cehrbert_data/patient_sequence)
+    with at least one concept, the ones tokenization keeps. Works before pretraining, which is
+    where this step now runs: steps 3b and 4 need its test split to exclude test patients.
+  * ``tokenized``: the full tokenized dataset of step 5b (data/full_tokenized).
+  * ``none``: no intersection (same as --skip-tokenized-check).
 
 Usage:
     python 06_prepare_finetuning_data.py
-    python 06_prepare_finetuning_data.py --gap-days 730 --skip-tokenized-check
+    python 06_prepare_finetuning_data.py --gap-days 730 --intersect-with none
 """
 
 from __future__ import annotations
@@ -124,12 +128,12 @@ def build_cohort(
 
 
 def restrict_to_tokenized(cohort: pl.DataFrame, prepared_dir: Path, report: StepReport) -> pl.DataFrame:
-    """Keep only patients present in the tokenized pretraining dataset."""
+    """Keep only patients present in the full tokenized dataset (step 5b)."""
     from pipeline.dataset_checks import count_person_ids, datasets_available, resolve_prepared_path
 
     if not prepared_dir.exists() or resolve_prepared_path(prepared_dir) is None:
         report.warn("tokenized dataset available for verification", ok=False,
-                    detail=f"{prepared_dir} not found; run pretraining first or use --skip-tokenized-check")
+                    detail=f"{prepared_dir} not found; run step 5b first or use --intersect-with sequences")
         return cohort
     if not datasets_available():
         report.warn("tokenized dataset verification", ok=False,
@@ -143,6 +147,27 @@ def restrict_to_tokenized(cohort: pl.DataFrame, prepared_dir: Path, report: Step
     report.add_metric("dropped_no_sequence", before - cohort.height)
     report.add_check("cohort patients remain after tokenized intersect", cohort.height > 0,
                      detail=f"{cohort.height} remain of {before}")
+    return cohort
+
+
+def restrict_to_sequences(cohort: pl.DataFrame, sequence_dir: Path, report: StepReport) -> pl.DataFrame | None:
+    """Keep only patients with a non-empty sequence in ``sequence_dir``; None (failed check) if it has none."""
+    from pipeline.pretrain_data import sequence_person_ids, sequence_files
+
+    if not report.add_check(
+        "patient sequences available", bool(sequence_files(sequence_dir)), detail=f"{sequence_dir}; run step 2 first"
+    ):
+        return None
+    sequence_ids = sequence_person_ids(sequence_dir, require_concepts=True)
+    before = cohort.height
+    cohort = cohort.filter(pl.col("person_id").is_in(list(sequence_ids)))
+    report.add_metric("sequence_patients", len(sequence_ids))
+    report.add_metric("dropped_no_sequence", before - cohort.height)
+    report.add_check(
+        "cohort patients remain after sequence intersect",
+        cohort.height > 0,
+        detail=f"{cohort.height} remain of {before}",
+    )
     return cohort
 
 
@@ -213,9 +238,16 @@ def main(argv: list[str] | None = None) -> int:
                         help="Seed for the train/val split; differs from --split-seed so hash orders are independent")
     parser.add_argument("--gap-days", type=int, default=365, help="Lead time between index_date and first AD dx")
     parser.add_argument("--min-history-days", type=int, default=182, help="Required history before index_date")
-    parser.add_argument("--tokenized-dataset-path", default=str(paths.PRETRAIN_PREPARED_DIR))
-    parser.add_argument("--skip-tokenized-check", action="store_true",
-                        help="Do not restrict to person_ids present in the tokenized dataset")
+    parser.add_argument(
+        "--intersect-with",
+        choices=("sequences", "tokenized", "none"),
+        default="sequences",
+        help="Keep patients present in the raw sequences (default), the full tokenized "
+        "dataset of step 5b, or skip the intersection",
+    )
+    parser.add_argument("--patient-sequence-dir", default=str(paths.PATIENT_SEQUENCE_DIR))
+    parser.add_argument("--tokenized-dataset-path", default=str(paths.FULL_TOKENIZED_DIR))
+    parser.add_argument("--skip-tokenized-check", action="store_true", help="Same as --intersect-with none")
     parser.add_argument("--report-dir", default=str(paths.report_dir_for("06_prepare_finetuning_data")))
     args = parser.parse_args(argv)
 
@@ -231,10 +263,17 @@ def main(argv: list[str] | None = None) -> int:
         report.add_check("required OMOP tables present", False, detail=str(exc))
         return _finalize(report, args.report_dir)
 
-    if args.skip_tokenized_check:
-        report.note("tokenized-data verification skipped (--skip-tokenized-check)")
-    else:
+    mode = "none" if args.skip_tokenized_check else args.intersect_with
+    report.add_metric("intersect_with", mode)
+    if mode == "none":
+        report.note("sequence/tokenized-data intersection skipped")
+    elif mode == "tokenized":
         cohort = restrict_to_tokenized(cohort, Path(args.tokenized_dataset_path), report)
+    else:
+        restricted = restrict_to_sequences(cohort, Path(args.patient_sequence_dir), report)
+        if restricted is None:
+            return _finalize(report, args.report_dir)
+        cohort = restricted
 
     n_case = int(cohort.filter(pl.col("label") == 1).height)
     n_ctrl = int(cohort.filter(pl.col("label") == 0).height)
@@ -305,7 +344,7 @@ def _finalize(report: StepReport, report_dir: str) -> int:
     report.print_summary()
     print(f"\nReport written to {report_dir}")
     if report.passed:
-        print("Next: python 07_validate_finetune_config.py")
+        print("Next: python 03b_build_pretraining_input.py")
     return report.exit_code()
 
 

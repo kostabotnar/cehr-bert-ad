@@ -36,9 +36,14 @@ DATA_DIR = PROJECT_ROOT / "data"
 OMOP_DIR = DATA_DIR / "omop_data"
 CEHRBERT_DATA_DIR = DATA_DIR / "cehrbert_data"
 PATIENT_SEQUENCE_DIR = CEHRBERT_DATA_DIR / "patient_sequence"
+# patient_sequence without the step 6 test patients; the only input of pretraining (step 3b).
+PATIENT_SEQUENCE_PRETRAIN_DIR = CEHRBERT_DATA_DIR / "patient_sequence_pretrain"
 
 PRETRAIN_PREPARED_DIR = DATA_DIR / "pretrain_prepared"
 PRETRAIN_RESULTS_DIR = DATA_DIR / "pretrain_results"
+# Every patient of patient_sequence tokenized with the pretrained tokenizer (step 5b); read by
+# steps 6 (tokenized mode), 8, 9, 10a and 15 through tokenized_full_dataset_path.
+FULL_TOKENIZED_DIR = DATA_DIR / "full_tokenized"
 
 FINETUNE_PREPARED_DIR = DATA_DIR / "finetune_prepared"
 FINETUNE_RESULTS_DIR = DATA_DIR / "finetune_results"

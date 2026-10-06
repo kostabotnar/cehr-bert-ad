@@ -145,6 +145,33 @@ def load_and_create_model(
     return model
 
 
+def create_pretraining_data_collator(
+    cehrbert_args: CehrBertArguments,
+    data_args: DataTrainingArguments,
+    model_args: ModelArguments,
+    tokenizer: CehrBertTokenizer,
+    mlm_probability: float,
+) -> CehrBertDataCollator:
+    """The pretraining collator: random truncation, MLM, and keep_demographic_prompt from ``data_args``."""
+    if cehrbert_args.sample_packing:
+        return SamplePackingCehrBertDataCollator(
+            cehrbert_args.max_tokens_per_batch,
+            model_args.max_position_embeddings,
+            tokenizer=tokenizer,
+            max_length=cehrbert_args.max_tokens_per_batch,
+            is_pretraining=True,
+            mlm_probability=mlm_probability,
+            keep_demographic_prompt=bool(data_args.keep_demographic_prompt),
+        )
+    return CehrBertDataCollator(
+        tokenizer=tokenizer,
+        max_length=model_args.max_position_embeddings,
+        is_pretraining=True,
+        mlm_probability=mlm_probability,
+        keep_demographic_prompt=bool(data_args.keep_demographic_prompt),
+    )
+
+
 def main():
     """
     Main function for preparing, loading, and training a CEHR-BERT model for pretraining.
@@ -349,26 +376,13 @@ def main():
         )
         training_args.per_device_train_batch_size = 1
         training_args.per_device_eval_batch_size = 1
-        data_collator_fn = partial(
-            SamplePackingCehrBertDataCollator,
-            cehrbert_args.max_tokens_per_batch,
-            model_args.max_position_embeddings,
-        )
     else:
         trainer_class = Trainer
-        data_collator_fn = CehrBertDataCollator
 
     trainer = trainer_class(
         model=model,
-        data_collator=data_collator_fn(
-            tokenizer=tokenizer,
-            max_length=(
-                cehrbert_args.max_tokens_per_batch
-                if cehrbert_args.sample_packing
-                else model_args.max_position_embeddings
-            ),
-            is_pretraining=True,
-            mlm_probability=model.config.mlm_probability,
+        data_collator=create_pretraining_data_collator(
+            cehrbert_args, data_args, model_args, tokenizer, model.config.mlm_probability
         ),
         train_dataset=processed_dataset["train"],
         eval_dataset=processed_dataset["validation"],

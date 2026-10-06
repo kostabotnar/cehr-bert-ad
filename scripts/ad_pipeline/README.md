@@ -1,34 +1,50 @@
 # Alzheimer's Disease Prediction Pipeline with CEHR-BERT
 
 Trains CEHR-BERT for Alzheimer's Disease (AD) prediction from OMOP data, as a sequence of
-**nine self-contained, individually-runnable steps**. Each step validates its inputs,
+**self-contained, individually-runnable steps**. Each step validates its inputs,
 does its work, and writes a result report (`reports/<step>/status.json` +
 `report.md`). Validation/verification steps gate the pipeline: a failure exits non-zero
 and the orchestrator halts.
 
+Steps in execution order. The order is not numeric: the cohort and its held-out test split
+(step 06) are built before pretraining, so the test patients are kept out of pretraining
+entirely (step 03b), and every patient is tokenized again after pretraining (step 05b).
+
 ```
-00 check environment        (deps / GPU / Java — advisory)
-01 validate dataset         verify required OMOP tables/columns exist
-02 prepare pretraining data generate CEHR-BERT patient sequences (Spark)
-03 evaluate pretrain config dry-run validate the pretraining config
-04 pretrain model           train CEHR-BERT
-05 verify pretraining       check model + tokenized dataset artifacts
-06 prepare finetuning data  build the labeled AD cohort + hold out a test split
-07 validate finetune config dry-run validate finetuning config + dependencies
-08 finetune                 fine-tune for AD prediction (train/validation)
-09 predict & verify         score the held-out test cohort + check ROC-AUC / PR-AUC
+00  check environment          (deps / GPU / Java, advisory)
+01  validate dataset           verify required OMOP tables/columns exist
+01b fill datetimes             fill null OMOP *_datetime columns from *_date columns
+02  prepare pretraining data   generate CEHR-BERT patient sequences (Spark)
+06  prepare finetuning data    labeled AD cohort + canonical train/val/test split
+03b build pretraining input    patient_sequence minus the test patients
+03  evaluate pretrain config   dry-run validate the pretraining config
+04  pretrain model             train CEHR-BERT (refuses test patients and stale artifacts)
+05  verify pretraining         model + prepared dataset; no test patient was pretrained on
+05b tokenize full dataset      every patient, with the pretrained tokenizer
+07  validate finetune config   dry-run validate finetuning config + dependencies
+08  finetune                   fine-tune for AD prediction (train/validation)
+09  predict & verify           score the held-out test cohort + check ROC-AUC / PR-AUC
+10a validation predictions     fine-tuned model on the val split (threshold selection)
+10  evaluate                   metrics with bootstrap confidence intervals
+11  baseline features          tabular features from OMOP
+12  train baselines            L2 logistic regression + XGBoost
+14  attention / token stats    attention analysis, token history statistics
+15  linear probe features      frozen CEHR-BERT features per split
+16  train linear probe         logistic regression on the frozen features
+13  compare models             parity check + comparison table (needs 10, 12, 16)
 ```
 
 ## Layout
 
 ```
 scripts/ad_pipeline/
-├── run_pipeline.sh                 orchestrator (runs 00..09, halts on first failure)
+├── run_pipeline.sh                 orchestrator (runs every step in order, halts on first failure)
 ├── 00_check_environment.py         01_validate_dataset.py         01b_fill_datetimes.py
 ├── 02_prepare_pretraining_data.py  + 02_generate_pretraining_data.sh   (Spark wrapper)
-├── 03_evaluate_pretrain_config.py
+├── 03_evaluate_pretrain_config.py  03b_build_pretraining_input.py
 ├── 04_pretrain.py                  + 04_pretrain.sh                     (runner wrapper)
-├── 05_verify_pretraining.py        06_prepare_finetuning_data.py
+├── 05_verify_pretraining.py        05b_tokenize_full_dataset.py
+├── 06_prepare_finetuning_data.py
 ├── 07_validate_finetune_config.py
 ├── 08_finetune.py                  + 08_finetune.sh                     (runner wrapper)
 ├── 09_predict.py                   + 09_predict.sh                      (runner wrapper)
@@ -70,20 +86,33 @@ cd scripts/ad_pipeline
 # Run everything, pointing step 1 at your OMOP data:
 bash run_pipeline.sh --link /path/to/your/omop_data
 
-# ...or run steps individually:
+# ...or run steps individually, in this order:
 python 00_check_environment.py
 python 01_validate_dataset.py --link /path/to/your/omop_data
+python 01b_fill_datetimes.py
 python 02_prepare_pretraining_data.py            # Spark; set SPARK_DRIVER_MEMORY as needed
+python 06_prepare_finetuning_data.py             # cohort + splits.parquet (needs only step 2)
+python 03b_build_pretraining_input.py            # patient_sequence_pretrain (no test patients)
 python 03_evaluate_pretrain_config.py
 python 04_pretrain.py
 python 05_verify_pretraining.py
-python 06_prepare_finetuning_data.py             # cohort -> ad_cohort/finetune + ad_cohort/test
+python 05b_tokenize_full_dataset.py              # data/full_tokenized (all patients)
 python 07_validate_finetune_config.py
 python 08_finetune.py                            # train/validation only (do_predict=false)
 python 09_predict.py                             # score the held-out test cohort + verify
+python 10a_validation_predictions.py
+python 10_evaluate.py
+python 11_prepare_baseline_features.py
+python 12_train_baselines.py
+python 14_attention_analysis.py
+python 14_token_history_stats.py
+python 15_linear_probe_features.py
+python 16_train_linear_probe.py
+python 13_compare_models.py
 ```
 
-Resume a partial run (e.g. after pretraining) with `bash run_pipeline.sh --from 06`.
+Resume a partial run with `bash run_pipeline.sh --from <step>`, e.g. `--from 07` after
+pretraining. `--from` names a position in the execution order above, not a number range.
 
 ## Reports
 
@@ -102,12 +131,16 @@ Exit codes: `0` = pass or warn (pipeline may continue), `1` = fail (gating). War
 ```
 data/
 ├── omop_data -> /path/to/your/data    symlink created by step 1 (--link)
-├── cehrbert_data/patient_sequence/     patient sequences            (step 2)
-├── pretrain_prepared/                  tokenized DatasetDict         (step 4)
-├── pretrain_results/                   pretrained model + tokenizer  (step 4)
+├── cehrbert_data/patient_sequence/     patient sequences, all patients        (step 2)
+├── cehrbert_data/patient_sequence_pretrain/  same, without test patients    (step 3b)
+├── pretrain_prepared/<name>_<hash>/    pretraining DatasetDict, no test patients (step 4)
+├── pretrain_results/                   pretrained model + tokenizer           (step 4)
+├── full_tokenized/                     all patients tokenized; validation =
+│                                        canonical val, train = the rest        (step 5b)
 ├── omop_data/ad_cohort/
 │   ├── finetune/cohort.parquet         fine-tuning cohort (~90%)     (step 6)
-│   └── test/cohort.parquet             held-out test cohort (~10%)   (step 6)
+│   ├── test/cohort.parquet             held-out test cohort (~10%)   (step 6)
+│   └── splits.parquet                  canonical train/val/test split (step 6)
 ├── finetune_prepared/                  fine-tuning dataset (train/val)  (step 8)
 ├── predict_prepared/                   test-cohort dataset           (step 9)
 └── finetune_results/
@@ -144,10 +177,19 @@ during training. This keeps fine-tuning simple and prediction independent:
 
 - **Step 6** splits the labeled cohort into `ad_cohort/finetune/` (~90%) and
   `ad_cohort/test/` (~10%), split by `person_id` with a fixed seed (no patient appears in
-  both). Tune with `--test-holdout 0.1 --split-seed 42`.
-- **Step 8** fine-tunes on `ad_cohort/finetune/` with an internal train/validation split
-  (`validation_split_percentage`) and `do_predict: false` — one clean run, no test split
-  needed here.
+  both), and writes the canonical `splits.parquet` (train / val / test). Tune with
+  `--test-holdout 0.1 --split-seed 42`. It runs right after step 2: it keeps only patients
+  with a non-empty sequence in `patient_sequence` (`--intersect-with sequences`, the default;
+  `--intersect-with tokenized` uses `data/full_tokenized` instead).
+- **Step 3b** removes every test patient from the pretraining input, so the pretrained
+  encoder never sees them (neither in its train nor its validation split). Step 4 refuses an
+  input that still holds a test patient, and step 5 checks the prepared dataset again.
+- **Step 5b** tokenizes every patient with the pretrained tokenizer into `data/full_tokenized`,
+  which fine-tuning, prediction and the linear probe read (`tokenized_full_dataset_path`).
+  Its `validation` split is the canonical val split, so step 8 validates on exactly that.
+- **Step 8** fine-tunes on `ad_cohort/finetune/` with `do_predict: false`. The train/validation
+  assignment comes from `data/full_tokenized` (canonical train / val), not from
+  `validation_split_percentage`, which this flow does not read.
 - **Step 9** runs prediction on `ad_cohort/test/` with the fine-tuned model
   (`do_train: false, do_predict: true`) and verifies the metrics. Re-runnable on its own.
 

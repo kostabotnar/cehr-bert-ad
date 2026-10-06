@@ -2,8 +2,8 @@
 """Step 15: Extract frozen CEHR-BERT features for the linear probe.
 
 For each canonical split (``train`` / ``val`` / ``test`` from ``splits.parquet``, step 6) the
-patient's pre-index history inside the look-back window is cut out of the tokenized
-pretraining dataset with cehrbert's ``extract_cohort_sequences``, fed through the frozen
+patient's pre-index history inside the look-back window is cut out of the full tokenized
+dataset (step 5b) with cehrbert's ``extract_cohort_sequences``, fed through the frozen
 pretrained encoder (no fine-tuning), and pooled into two feature sets (see
 ``pipeline.linear_probe``): ``cls`` (the [CLS] hidden state) and ``mean`` (mean over real
 tokens). Step 16 trains a logistic regression on them.
@@ -62,8 +62,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--splits-file", default=str(paths.COHORT_SPLITS_FILE))
     parser.add_argument(
         "--tokenized-dataset",
-        default=str(paths.PRETRAIN_PREPARED_DIR),
-        help="Tokenized pretraining dataset (a folder holding one hashed DatasetDict, or that DatasetDict itself)",
+        default=str(paths.FULL_TOKENIZED_DIR),
+        help="Tokenized dataset with every patient (step 5b), or a folder holding exactly one such DatasetDict",
     )
     parser.add_argument("--finetune-config", default=str(paths.FINETUNE_CONFIG))
     parser.add_argument("--model-dir", default=str(paths.PRETRAIN_RESULTS_DIR))

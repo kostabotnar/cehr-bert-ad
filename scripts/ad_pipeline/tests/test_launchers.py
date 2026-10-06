@@ -74,28 +74,54 @@ def test_step02_preflight_gate_blocks_launch(step, tmp_path, monkeypatch):
 
 
 # --- step 04 ---------------------------------------------------------------
-def test_step04_launch_success(step, pretrain_config, patient_sequence_dir, tmp_path, monkeypatch):
+def _splits(tmp_path, test_ids=(7,)):
+    import polars as pl
+
+    path = tmp_path / "splits.parquet"
+    ids = [1, 2, *test_ids]
+    pl.DataFrame({"person_id": ids, "split": ["train", "val"] + ["test"] * len(test_ids)}).write_parquet(path)
+    return path
+
+
+def test_step04_launch_success(step, pretrain_config, tmp_path, monkeypatch):
     mod = step("04_pretrain.py")
-    monkeypatch.setattr(mod.paths, "PATIENT_SEQUENCE_DIR", patient_sequence_dir)
     monkeypatch.setattr(mod.paths, "PRETRAIN_PREPARED_DIR", tmp_path / "pp")
     monkeypatch.setattr(mod.paths, "PRETRAIN_RESULTS_DIR", tmp_path / "pr")
     rec = CallRecorder(returncode=0)
     monkeypatch.setattr(mod.launch, "run_command", rec)
 
     rep = tmp_path / "rep04"
-    rc = mod.main(["--config", str(pretrain_config), "--report-dir", str(rep)])
+    rc = mod.main(["--config", str(pretrain_config), "--splits-file", str(_splits(tmp_path)), "--report-dir", str(rep)])
     assert rc == 0
     assert len(rec.calls) == 1
 
 
 def test_step04_missing_sequences_gates_launch(step, pretrain_config, tmp_path, monkeypatch):
     mod = step("04_pretrain.py")
-    monkeypatch.setattr(mod.paths, "PATIENT_SEQUENCE_DIR", tmp_path / "no_sequences")
+    cfg = yaml.safe_load(pretrain_config.read_text(encoding="utf-8"))
+    cfg["data_folder"] = str(tmp_path / "no_sequences")
+    pretrain_config.write_text(yaml.safe_dump(cfg), encoding="utf-8")
     rec = CallRecorder(returncode=0)
     monkeypatch.setattr(mod.launch, "run_command", rec)
 
     rep = tmp_path / "rep04b"
-    rc = mod.main(["--config", str(pretrain_config), "--report-dir", str(rep)])
+    rc = mod.main(["--config", str(pretrain_config), "--splits-file", str(_splits(tmp_path)), "--report-dir", str(rep)])
+    assert rc == 1
+    assert rec.calls == []
+
+
+def test_step04_missing_splits_gates_launch(step, pretrain_config, tmp_path, monkeypatch):
+    mod = step("04_pretrain.py")
+    rec = CallRecorder(returncode=0)
+    monkeypatch.setattr(mod.launch, "run_command", rec)
+
+    rc = mod.main(
+        [
+            "--config", str(pretrain_config),
+            "--splits-file", str(tmp_path / "none.parquet"),
+            "--report-dir", str(tmp_path / "rep04c"),
+        ]
+    )  # fmt: skip
     assert rc == 1
     assert rec.calls == []
 
