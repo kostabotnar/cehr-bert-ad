@@ -79,28 +79,42 @@ def main(argv: list[str] | None = None) -> int:
                         help="Test predictions parquet folder")
     parser.add_argument("--val-predictions", default=str(paths.VAL_PREDICTIONS_DIR),
                         help="Validation predictions folder for unbiased threshold selection")
-    parser.add_argument("--results-dir", default=str(paths.EVAL_RESULTS_DIR))
-    parser.add_argument("--figures-dir", default=str(paths.FIGURES_DIR))
-    parser.add_argument("--report-dir", default=str(paths.build_report_dir_for("10_evaluate")))
+    parser.add_argument("--window-days", type=int, default=paths.DEFAULT_WINDOW_DAYS,
+                        help="Look-back window in days for the run label (negative = all history).")
+    parser.add_argument("--ctx", type=int, default=paths.DEFAULT_CTX,
+                        help="Token context for the run label.")
+    parser.add_argument("--results-dir", default=None,
+                        help="Override results dir; defaults to build/<run_label>/ (metrics.json).")
+    parser.add_argument("--figures-dir", default=None,
+                        help="Override figures dir; defaults to build/<run_label>/figures.")
+    parser.add_argument("--report-dir", default=None,
+                        help="Override report dir; defaults to build/<run_label>/reports/10_evaluate.")
     parser.add_argument("--n-bootstrap", type=int, default=2000)
     parser.add_argument("--cal-bins", type=int, default=10)
     parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args(argv)
 
+    # Build outputs nest under build/<run_label>/; explicit overrides still win.
+    label = paths.run_label(args.window_days, args.ctx)
+    results_dir = Path(args.results_dir) if args.results_dir else paths.eval_results_dir(label)
+    figures_dir = Path(args.figures_dir) if args.figures_dir else paths.figures_dir(label)
+    report_dir = Path(args.report_dir) if args.report_dir else paths.build_report_dir_for("10_evaluate", label)
+
     report = StepReport("10_evaluate", title="Step 10 - Evaluate fine-tuned AD classifier")
+    report.add_metric("run_label", label)
     pred_dir = Path(args.predictions)
     report.add_metric("predictions_dir", str(pred_dir))
 
     if not report.add_check("test predictions exist", pred_dir.is_dir() and any(pred_dir.glob("*.parquet")),
                             detail=str(pred_dir)):
-        return _finalize(report, args.report_dir)
+        return _finalize(report, report_dir)
 
     y_true, y_prob = ev.load_predictions(pred_dir)
     report.add_metric("n_test", int(len(y_true)))
     report.add_metric("n_positive", int(y_true.sum()))
     if not report.add_check("test set has both classes", 0 < y_true.sum() < len(y_true),
                             detail=f"{int(y_true.sum())} positive of {len(y_true)}"):
-        return _finalize(report, args.report_dir)
+        return _finalize(report, report_dir)
 
     # --- discrimination (with CIs) ----------------------------------------
     disc = ev.discrimination_metrics(y_true, y_prob)
@@ -143,7 +157,7 @@ def main(argv: list[str] | None = None) -> int:
                 detail=f"slope={cal.slope:.3f} (1.0 = perfect; <1 overconfident)")
 
     # --- figures -----------------------------------------------------------
-    fig_dir = Path(args.figures_dir)
+    fig_dir = figures_dir
     roc_p = ev.plot_roc(y_true, y_prob, fig_dir / "roc_curve.png", auroc=disc["auroc"])
     pr_p = ev.plot_pr(y_true, y_prob, fig_dir / "pr_curve.png", auprc=disc["auprc"])
     cal_p = ev.plot_calibration(cal, fig_dir / "calibration_curve.png")
@@ -152,7 +166,6 @@ def main(argv: list[str] | None = None) -> int:
         report.add_artifact(p)
 
     # --- write full metrics.json ------------------------------------------
-    results_dir = Path(args.results_dir)
     results_dir.mkdir(parents=True, exist_ok=True)
     payload = {
         "n_test": int(len(y_true)),
@@ -178,7 +191,7 @@ def main(argv: list[str] | None = None) -> int:
     metrics_path.write_text(json.dumps(payload, indent=2, default=float), encoding="utf-8")
     report.add_artifact(metrics_path)
 
-    return _finalize(report, args.report_dir)
+    return _finalize(report, report_dir)
 
 
 def _finalize(report: StepReport, report_dir: str) -> int:

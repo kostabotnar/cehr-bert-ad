@@ -8,6 +8,14 @@
 #   bash run_pipeline.sh                 # run steps 00..09
 #   bash run_pipeline.sh --from 06       # resume from step 06 (e.g. after pretraining)
 #   bash run_pipeline.sh --link /path/to/omop_data   # pass-through to step 01
+#   bash run_pipeline.sh --ctx 4096 --observation-window -1  # experiment overrides
+#
+# Experiment overrides (optional):
+#   --ctx <int>                 token context; forwarded to steps 04, 08, 09 as --ctx.
+#   --observation-window <int>  look-back in days (negative = all history); forwarded
+#                               to steps 08 and 09 as --observation-window. Step 04
+#                               (pretraining) has no observation window, so it is not
+#                               forwarded there.
 #
 # Notes:
 #   * Steps 02/04/08 are heavy (Spark / model training) and need the full runtime env.
@@ -22,6 +30,8 @@ INVOCATION_DIR="$(pwd)"   # captured before we cd into SCRIPT_DIR
 
 FROM="00"
 LINK_ARG=""
+CTX_ARG=""        # forwarded to steps 04, 08, 09 when --ctx is given
+OBS_ARG=""        # forwarded to steps 08, 09 when --observation-window is given
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --from) FROM="$2"; shift 2 ;;
@@ -32,6 +42,8 @@ while [[ $# -gt 0 ]]; do
             [[ "${link_src}" != /* ]] && link_src="$(realpath -m "${INVOCATION_DIR}/${link_src}")"
             LINK_ARG="--link ${link_src}"
             shift 2 ;;
+        --ctx) CTX_ARG="--ctx $2"; shift 2 ;;
+        --observation-window) OBS_ARG="--observation-window $2"; shift 2 ;;
         *) echo "Unknown argument: $1"; exit 2 ;;
     esac
 done
@@ -42,12 +54,12 @@ declare -a STEPS=(
     "01:${PY} 01_validate_dataset.py ${LINK_ARG}"
     "02:${PY} 02_prepare_pretraining_data.py"
     "03:${PY} 03_evaluate_pretrain_config.py"
-    "04:${PY} 04_pretrain.py"
+    "04:${PY} 04_pretrain.py ${CTX_ARG}"
     "05:${PY} 05_verify_pretraining.py"
     "06:${PY} 06_prepare_finetuning_data.py"
     "07:${PY} 07_validate_finetune_config.py"
-    "08:${PY} 08_finetune.py"
-    "09:${PY} 09_predict.py"
+    "08:${PY} 08_finetune.py ${CTX_ARG} ${OBS_ARG}"
+    "09:${PY} 09_predict.py ${CTX_ARG} ${OBS_ARG}"
 )
 
 mkdir -p "${REPORTS_DIR}"

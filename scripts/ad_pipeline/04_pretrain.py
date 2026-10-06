@@ -20,10 +20,23 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from pipeline import launch, paths  # noqa: E402
-from pipeline.config_validation import add_pretrain_config_checks  # noqa: E402
+from pipeline.config_validation import add_pretrain_config_checks, load_yaml, write_config  # noqa: E402
 from pipeline.reporting import StepReport  # noqa: E402
 
 WRAPPER = Path(__file__).resolve().parent / "04_pretrain.sh"
+
+
+def _apply_ctx_override(config: dict, max_position_embeddings: int | None) -> None:
+    """Override the token context in-place when a CLI value is provided.
+
+    Sets ``max_position_embeddings`` and, only if already present, mirrors the value
+    into ``sample_packing_max_positions``. A ``None`` value preserves the YAML config.
+    """
+    if max_position_embeddings is None:
+        return
+    config["max_position_embeddings"] = int(max_position_embeddings)
+    if "sample_packing_max_positions" in config:
+        config["sample_packing_max_positions"] = int(max_position_embeddings)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -31,6 +44,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--config", default=str(paths.PRETRAIN_CONFIG))
     parser.add_argument("--skip-launch", action="store_true", help="Run preflight only; do not launch training")
     parser.add_argument("--report-dir", default=str(paths.report_dir_for("04_pretrain")))
+    parser.add_argument(
+        "--max-position-embeddings", "--ctx", type=int, default=None, dest="max_position_embeddings",
+        help="Override the token context (max_position_embeddings / sample_packing_max_positions); "
+             "default uses the YAML value.")
     args = parser.parse_args(argv)
 
     report = StepReport("04_pretrain", title="Step 4 — Pretrain CEHR-BERT")
@@ -51,11 +68,21 @@ def main(argv: list[str] | None = None) -> int:
     paths.PRETRAIN_PREPARED_DIR.mkdir(parents=True, exist_ok=True)
     paths.PRETRAIN_RESULTS_DIR.mkdir(parents=True, exist_ok=True)
 
+    # CLI overrides: when provided, write an effective config and launch with that;
+    # otherwise launch with the original YAML unchanged (preserves current behavior).
+    launch_config_path = Path(args.config)
+    if args.max_position_embeddings is not None:
+        config = load_yaml(Path(args.config))
+        _apply_ctx_override(config, args.max_position_embeddings)
+        report.add_metric("max_position_embeddings", config["max_position_embeddings"])
+        launch_config_path = write_config(config, Path(args.report_dir) / "effective_pretrain_config.yaml")
+        report.add_artifact(launch_config_path)
+
     # --- launch ------------------------------------------------------------
     if args.skip_launch:
         report.note("Launch skipped (--skip-launch).")
     else:
-        rc = launch.run_command(["bash", str(WRAPPER), str(Path(args.config))], cwd=paths.PROJECT_ROOT)
+        rc = launch.run_command(["bash", str(WRAPPER), str(launch_config_path)], cwd=paths.PROJECT_ROOT)
         report.add_metric("launch_returncode", rc)
         if not report.add_check("pretraining process succeeded", rc == 0, detail=f"exit code {rc}"):
             return _finalize(report, args.report_dir)
