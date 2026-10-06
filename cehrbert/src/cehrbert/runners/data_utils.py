@@ -115,7 +115,9 @@ def extract_cohort_sequences(
                 "boolean_value": "label",
             }
         )
-    all_person_ids = cohort["person_id"].unique().to_list()
+    # A set keeps the per-row membership tests below O(1); with a list they are quadratic
+    # in the cohort size (hours for several hundred thousand patients).
+    all_person_ids = set(cohort["person_id"].unique().to_list())
     # In case the label column does not exist, we add a fake column to the dataframe so subsequent process can work
     if "label" not in cohort.columns:
         cohort = cohort.with_columns(pl.Series(name="label", values=np.zeros_like(cohort["person_id"].to_numpy())))
@@ -147,9 +149,9 @@ def extract_cohort_sequences(
         )
     }
     LOG.info(f"person_index_date_agg: {person_index_date_agg}")
-    tokenized_person_ids = []
+    tokenized_person_ids = set()
     for _, dataset in filtered_tokenized_dataset.items():
-        tokenized_person_ids.extend(dataset["person_id"])
+        tokenized_person_ids.update(dataset["person_id"])
     missing_person_ids = [
         person_id for person_id in person_index_date_map.keys() if person_id not in tokenized_person_ids
     ]
