@@ -125,3 +125,44 @@ def _check_table(report: StepReport, data_dir: Path, table: str, level: str, pre
             detail="ok" if not missing else f"missing: {', '.join(missing)}",
             level=col_level,
         )
+
+
+def visit_start_datetime_all_null(glob: str) -> Optional[bool]:
+    """True when ``visit_start_datetime`` is null in every row, None when the column is absent.
+
+    Uses parquet column statistics (no data read) and falls back to reading the first row
+    group of that column when a file has no null-count statistics.
+    """
+    all_null = True
+    for path in _glob_to_paths(glob):
+        pf = pq.ParquetFile(path)
+        names = pf.schema_arrow.names
+        if "visit_start_datetime" not in names:
+            return None
+        idx = names.index("visit_start_datetime")
+        for rg in range(pf.num_row_groups):
+            meta = pf.metadata.row_group(rg)
+            stats = meta.column(idx).statistics
+            if stats is not None and stats.has_null_count:
+                if stats.null_count < meta.num_rows:
+                    return False
+            elif pf.read_row_group(rg, columns=["visit_start_datetime"]).column(0).null_count < meta.num_rows:
+                return False
+    return all_null
+
+
+def add_visit_datetime_check(report: StepReport, data_dir: Path) -> None:
+    """Fail when visit_occurrence.visit_start_datetime is entirely null (step 02 orders visits by it)."""
+    glob = table_glob(Path(data_dir), "visit_occurrence")
+    if glob is None:
+        return
+    all_null = visit_start_datetime_all_null(glob)
+    if all_null is None:
+        return
+    report.add_check(
+        "visit_start_datetime populated",
+        not all_null,
+        detail="entirely null: run 01b_fill_datetimes.py first, otherwise visits are not ordered chronologically"
+        if all_null
+        else "ok",
+    )

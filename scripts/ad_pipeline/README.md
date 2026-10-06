@@ -24,7 +24,7 @@ and the orchestrator halts.
 ```
 scripts/ad_pipeline/
 ├── run_pipeline.sh                 orchestrator (runs 00..09, halts on first failure)
-├── 00_check_environment.py         01_validate_dataset.py
+├── 00_check_environment.py         01_validate_dataset.py         01b_fill_datetimes.py
 ├── 02_prepare_pretraining_data.py  + 02_generate_pretraining_data.sh   (Spark wrapper)
 ├── 03_evaluate_pretrain_config.py
 ├── 04_pretrain.py                  + 04_pretrain.sh                     (runner wrapper)
