@@ -83,6 +83,23 @@ def load_cohort_args(config_path: str | Path, cohort_folder: str | Path, tokeniz
     return cehrbert_args, data_args
 
 
+def shift_index_dates_for_exclusive_end(cohort):
+    """Return ``cohort`` with ``index_date`` as a datetime one second before midnight of the index date.
+
+    cehrbert keeps events with ``start <= epoch_time <= index_date`` and ``epoch_times`` are
+    midnight UTC, so a date-valued index_date would include events on the index date. The
+    comparability contract (and step 11) use ``[index_date - window, index_date)``. Ending the
+    window one second early excludes index-day events and, with the window length unchanged,
+    keeps events on index - window and drops index - window - 1 day. Applies to the
+    unbounded window too (the end is shifted, the start stays at 0).
+    """
+    import polars as pl
+
+    return cohort.with_columns(
+        (pl.col("index_date").cast(pl.Datetime("us")) - pl.duration(seconds=1)).alias("index_date")
+    )
+
+
 def build_split_dataset(split_df, work_dir: str | Path, config_path: str | Path, tokenized_path, window_days: int):
     """Window and label one canonical split with cehrbert's ``extract_cohort_sequences``.
 
@@ -96,7 +113,8 @@ def build_split_dataset(split_df, work_dir: str | Path, config_path: str | Path,
 
     cohort_folder = Path(work_dir)
     cohort_folder.mkdir(parents=True, exist_ok=True)
-    split_df.select(["person_id", "index_date", "label"]).write_parquet(cohort_folder / "cohort.parquet")
+    shifted = shift_index_dates_for_exclusive_end(split_df.select(["person_id", "index_date", "label"]))
+    shifted.write_parquet(cohort_folder / "cohort.parquet")
     cehrbert_args, data_args = load_cohort_args(config_path, cohort_folder, tokenized_path, window_days)
     processed = extract_cohort_sequences(data_args, cehrbert_args)
     return concatenate_datasets(list(processed.values()))

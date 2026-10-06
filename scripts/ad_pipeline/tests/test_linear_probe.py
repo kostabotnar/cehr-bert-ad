@@ -161,19 +161,24 @@ def test_load_frozen_model_uses_sdpa_and_eval(tmp_path):
 # --------------------------------------------------------------------------
 # Step 15 end to end on a synthetic tokenized dataset
 # --------------------------------------------------------------------------
+# Days before the index date of the synthetic events (0 = on the index date).
+EVENT_OFFSET_DAYS = [0, 1, 50, 365, 366, 500]
+
+
 def _tokenized_dataset_dict(people: dict[int, dt.date]):
-    """Per person: 12 events, one every 100 days, ending 10 days before the index date."""
     rng = np.random.default_rng(3)
     rows = []
     for pid, index_date in people.items():
         index_ts = dt.datetime(index_date.year, index_date.month, index_date.day, tzinfo=dt.timezone.utc).timestamp()
-        epoch = [index_ts - (10 + 100 * k) * 86400 for k in range(11, -1, -1)]
+        offsets = sorted(EVENT_OFFSET_DAYS, reverse=True)
+        epoch = [index_ts - d * 86400 for d in offsets]
         n = len(epoch)
         orders = list(range(1, n + 1))
         rows.append(
             {
                 "person_id": pid,
-                "concept_ids": [str(c) for c in rng.integers(100, 130, size=n)],
+                # concept_ids carries the offset so the test can see which events survived.
+                "concept_ids": [str(d) for d in offsets],
                 "input_ids": rng.integers(len(SPECIAL), len(VOCAB), size=n).tolist(),
                 "epoch_times": epoch,
                 "ages": [50 + o for o in orders],
@@ -188,6 +193,36 @@ def _tokenized_dataset_dict(people: dict[int, dt.date]):
     return datasets.DatasetDict(
         {"train": datasets.Dataset.from_list(rows[:half]), "validation": datasets.Dataset.from_list(rows[half:])}
     )
+
+
+def test_shift_index_dates_for_exclusive_end():
+    df = pl.DataFrame({"person_id": [1], "index_date": [dt.date(2020, 3, 1)], "label": [0]})
+    out = lp.shift_index_dates_for_exclusive_end(df)
+    assert out["index_date"].dtype == pl.Datetime("us")
+    assert out["index_date"][0] == dt.datetime(2020, 2, 29, 23, 59, 59)
+    assert out["person_id"].to_list() == [1] and out["label"].to_list() == [0]
+
+
+@pytest.mark.parametrize("window_days, kept", [(365, [365, 50, 1]), (-1, [500, 366, 365, 50, 1])])
+def test_window_excludes_index_day_and_matches_step11_semantics(tmp_path, window_days, kept):
+    index = dt.date(2020, 1, 1)
+    base = tmp_path / "pretrain_prepared" / "hash"
+    _tokenized_dataset_dict({1: index, 2: index}).save_to_disk(str(base))
+    split = pl.DataFrame(
+        {"person_id": [1, 2], "index_date": [index] * 2, "label": [0, 1]},
+        schema={"person_id": pl.Int64, "index_date": pl.Date, "label": pl.Int64},
+    )
+    config = tmp_path / "ft.yaml"
+    config.write_text(
+        yaml.safe_dump({"data_folder": "x", "dataset_prepared_path": "x", "preprocessing_num_workers": 1}),
+        encoding="utf-8",
+    )
+    ds = lp.build_split_dataset(split, tmp_path / "work", config, base, window_days)
+    # Step 11 window: [index - window, index), i.e. offsets 1..window days (all history: > 0).
+    expected = sorted(kept, reverse=True)
+    for row in ds:
+        assert row["concept_ids"] == [str(d) for d in expected]
+    assert len(ds) == 2
 
 
 def test_step15_end_to_end(step, tmp_path):
@@ -249,8 +284,8 @@ def test_step15_end_to_end(step, tmp_path):
         meta = pd.read_parquet(out / split / "meta.parquet")
         assert sorted(meta["person_id"]) == pids
         assert list(meta.columns) == ["person_id", "index_date", "label", "n_tokens_before_truncation", "truncated"]
-        # 365-day window with one event per 100 days ending 10 days before the index date: 4 events.
-        assert meta["n_tokens_before_truncation"].tolist() == [4, 4]
+        # Events at 1, 50 and 365 days before the index date are in the window; day 0 and 366 are not.
+        assert meta["n_tokens_before_truncation"].tolist() == [3, 3]
         assert not meta["truncated"].any()
         assert (meta["index_date"] == pd.Timestamp(index)).all()
         for kind in lp.FEATURE_KINDS:
