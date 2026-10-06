@@ -270,6 +270,84 @@ def bootstrap_ci(y_true: np.ndarray, y_prob: np.ndarray,
 
 
 # --------------------------------------------------------------------------- #
+# Paired bootstrap between two models on the same patients
+# --------------------------------------------------------------------------- #
+SUBJECT_COLUMN = "subject_id"
+
+
+def load_prediction_frame(pred_dir: str | Path) -> pd.DataFrame:
+    """Load a prediction folder as a frame sorted by subject_id with columns subject_id, y_true, y_prob."""
+    df = pd.read_parquet(pred_dir)
+    missing = {SUBJECT_COLUMN, PROBABILITY_COLUMN, LABEL_COLUMN} - set(df.columns)
+    if missing:
+        raise ValueError(f"prediction frame is missing columns {sorted(missing)}")
+    out = pd.DataFrame(
+        {
+            SUBJECT_COLUMN: df[SUBJECT_COLUMN].astype("int64"),
+            "y_true": df[LABEL_COLUMN].astype("int64"),
+            "y_prob": pd.to_numeric(df[PROBABILITY_COLUMN]).astype(float),
+        }
+    )
+    return out.sort_values(SUBJECT_COLUMN, kind="stable").reset_index(drop=True)
+
+
+def _aligned_arrays(frame_a: pd.DataFrame, frame_b: pd.DataFrame) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Return (y_true, prob_a, prob_b) with rows matched by subject_id; raise if the patients differ."""
+    for name, frame in (("first", frame_a), ("second", frame_b)):
+        if frame[SUBJECT_COLUMN].duplicated().any():
+            raise ValueError(f"{name} model has duplicated subject_id rows")
+    a = frame_a.sort_values(SUBJECT_COLUMN).reset_index(drop=True)
+    b = frame_b.sort_values(SUBJECT_COLUMN).reset_index(drop=True)
+    if len(a) != len(b) or not (a[SUBJECT_COLUMN].to_numpy() == b[SUBJECT_COLUMN].to_numpy()).all():
+        raise ValueError("models are not evaluated on the same set of subject_ids")
+    if not (a["y_true"].to_numpy() == b["y_true"].to_numpy()).all():
+        raise ValueError("models disagree on labels for the same subject_ids")
+    return a["y_true"].to_numpy(), a["y_prob"].to_numpy(dtype=float), b["y_prob"].to_numpy(dtype=float)
+
+
+def paired_bootstrap_differences(
+    frame_a: pd.DataFrame,
+    frame_b: pd.DataFrame,
+    n_resamples: int = 2000,
+    seed: int = 42,
+    alpha: float = 0.05,
+) -> Dict[str, Dict[str, float]]:
+    """AUROC and AUPRC differences (model A minus model B) with paired percentile bootstrap CIs.
+
+    The frames come from ``load_prediction_frame``. Patients are matched by subject_id and each
+    resample draws the same patients for both models, so the interval reflects the paired
+    difference. Single-class resamples are skipped. Raises ValueError if the patient sets differ.
+    """
+    y, prob_a, prob_b = _aligned_arrays(frame_a, frame_b)
+    metric_fns = {"auroc": roc_auc_score, "auprc": average_precision_score}
+    result: Dict[str, Dict[str, float]] = {}
+    diffs: Dict[str, List[float]] = {name: [] for name in metric_fns}
+    rng = np.random.default_rng(seed)
+    n = len(y)
+    for _ in range(n_resamples):
+        idx = rng.integers(0, n, size=n)
+        yt = y[idx]
+        if len(np.unique(yt)) < 2:
+            continue
+        for name, fn in metric_fns.items():
+            diffs[name].append(float(fn(yt, prob_a[idx]) - fn(yt, prob_b[idx])))
+    for name, fn in metric_fns.items():
+        point_a, point_b = float(fn(y, prob_a)), float(fn(y, prob_b))
+        stats = diffs[name]
+        lo = float(np.percentile(stats, 100 * alpha / 2)) if stats else float("nan")
+        hi = float(np.percentile(stats, 100 * (1 - alpha / 2))) if stats else float("nan")
+        result[name] = {
+            "a": point_a,
+            "b": point_b,
+            "diff": point_a - point_b,
+            "ci_low": lo,
+            "ci_high": hi,
+            "n_valid_resamples": len(stats),
+        }
+    return result
+
+
+# --------------------------------------------------------------------------- #
 # Plot helpers (each saves a 300 DPI figure and returns the path)
 # --------------------------------------------------------------------------- #
 def _new_ax(figsize=(6, 5)):

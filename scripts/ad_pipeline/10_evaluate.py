@@ -136,6 +136,7 @@ def main(argv: list[str] | None = None) -> int:
     operating = {name: ev.threshold_metrics(y_true, y_prob, thr) for name, thr in thresholds.items()}
 
     primary = operating[PRIMARY_METHOD]
+    operating_cis: dict[str, list[float]] = {}
     for key in ("sensitivity", "specificity", "ppv"):
         pt, lo, hi = ev.bootstrap_ci(
             y_true, y_prob,
@@ -143,11 +144,16 @@ def main(argv: list[str] | None = None) -> int:
             args.n_bootstrap, args.seed)
         report.add_metric(f"{key}@{PRIMARY_METHOD}", round(pt, 4))
         report.add_metric(f"{key}@{PRIMARY_METHOD}_ci95", [round(lo, 4), round(hi, 4)])
+        operating_cis[f"{key}_ci95"] = [lo, hi]
 
     # --- calibration -------------------------------------------------------
     cal = ev.calibration_metrics(y_true, y_prob, n_bins=args.cal_bins)
     brier_pt, brier_lo, brier_hi = ev.bootstrap_ci(
         y_true, y_prob, lambda t, p: ev.brier_score_loss(t, p), args.n_bootstrap, args.seed)
+    _, ece_lo, ece_hi = ev.bootstrap_ci(
+        y_true, y_prob, lambda t, p: ev.calibration_metrics(t, p, n_bins=args.cal_bins).ece, args.n_bootstrap, args.seed)
+    _, slope_lo, slope_hi = ev.bootstrap_ci(
+        y_true, y_prob, lambda t, p: ev.calibration_metrics(t, p, n_bins=args.cal_bins).slope, args.n_bootstrap, args.seed)
     report.add_metric("brier", round(cal.brier, 4))
     report.add_metric("brier_ci95", [round(brier_lo, 4), round(brier_hi, 4)])
     report.add_metric("ece", round(cal.ece, 4))
@@ -176,10 +182,14 @@ def main(argv: list[str] | None = None) -> int:
             "prevalence": disc["prevalence"],
         },
         "threshold_selected_on": report.metrics.get("threshold_selected_on"),
-        "operating_points": operating,
+        "operating_points": {
+            **operating,
+            PRIMARY_METHOD: {**operating[PRIMARY_METHOD], **operating_cis},
+        },
         "calibration": {
             "brier": cal.brier, "brier_ci95": [brier_lo, brier_hi],
-            "ece": cal.ece, "slope": cal.slope, "intercept": cal.intercept,
+            "ece": cal.ece, "ece_ci95": [ece_lo, ece_hi],
+            "slope": cal.slope, "slope_ci95": [slope_lo, slope_hi], "intercept": cal.intercept,
             "reliability_curve": {
                 "mean_predicted": cal.bin_centers,
                 "observed_rate": cal.bin_true,

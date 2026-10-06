@@ -384,7 +384,10 @@ def test_step13_writes_comparison(baseline_run, step):
     figures = root / "figures"
     rc = step("13_compare_models.py").main(
         [
+            "--splits-file", str(root / "splits.parquet"),
             "--baselines-dir", str(baseline_run["baselines"]),
+            "--linear-probe-dir", str(root / "missing_linear_probe"),
+            "--output-dir", str(root / "comparison"),
             "--cehrbert-metrics", str(root / "missing_metrics.json"),
             "--cehrbert-predictions", str(root / "missing_predictions"),
             "--figures-dir", str(figures),
@@ -395,8 +398,8 @@ def test_step13_writes_comparison(baseline_run, step):
     assert rc == 0
     baselines = baseline_run["baselines"]
     for path in (
-        baselines / "comparison.json",
-        baselines / "comparison.md",
+        root / "comparison" / "comparison.json",
+        root / "comparison" / "comparison.md",
         baselines / "lr" / "metrics.json",
         baselines / "xgboost" / "metrics.json",
         figures / "compare_roc.png",
