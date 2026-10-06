@@ -30,6 +30,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import sys
 from pathlib import Path
 
@@ -138,26 +139,41 @@ def restrict_to_tokenized(cohort: pl.DataFrame, prepared_dir: Path, report: Step
     return cohort
 
 
+def _bucket(seed: int, pid: int) -> int:
+    # Stable per-patient hash in [0, 1_000_000); independent of row order / polars version.
+    h = hashlib.md5(f"{seed}:{pid}".encode(), usedforsecurity=False).hexdigest()
+    return int(h[:8], 16) % 1_000_000
+
+
+def _hash_split(cohort: pl.DataFrame, fraction: float, seed: int) -> tuple[pl.DataFrame, pl.DataFrame]:
+    """Return (rest, selected) where selected holds patients whose bucket is below ``fraction``."""
+    threshold = int(fraction * 1_000_000)
+    with_bucket = cohort.with_columns(
+        pl.col("person_id").map_elements(lambda pid: _bucket(seed, pid), return_dtype=pl.Int64).alias("_bucket")
+    )
+    selected = with_bucket.filter(pl.col("_bucket") < threshold).drop("_bucket").sort("person_id")
+    rest = with_bucket.filter(pl.col("_bucket") >= threshold).drop("_bucket").sort("person_id")
+    return rest, selected
+
+
+def split_train_val(finetune: pl.DataFrame, val_fraction: float, val_seed: int) -> tuple[pl.DataFrame, pl.DataFrame]:
+    """Patient-level split of the fine-tune cohort into (train, val), hashed with ``val_seed``."""
+    return _hash_split(finetune, val_fraction, val_seed)
+
+
+def build_splits_table(train: pl.DataFrame, val: pl.DataFrame, test: pl.DataFrame) -> pl.DataFrame:
+    """Stack the three splits into one table with a string ``split`` column."""
+    parts = [df.with_columns(split=pl.lit(name)) for name, df in (("train", train), ("val", val), ("test", test))]
+    return pl.concat(parts).select("person_id", "index_date", "label", "split").sort("person_id")
+
+
 def split_finetune_test(cohort: pl.DataFrame, test_holdout: float, seed: int) -> tuple[pl.DataFrame, pl.DataFrame]:
     """Patient-level split into (finetune, test). No person_id appears in both.
 
     Deterministic: patients are ordered by a stable hash of (seed, person_id), and the
     first ``test_holdout`` fraction become the test set.
     """
-    import hashlib
-
-    def _bucket(pid: int) -> int:
-        # Stable per-patient hash in [0, 1_000_000); independent of row order / polars version.
-        h = hashlib.md5(f"{seed}:{pid}".encode(), usedforsecurity=False).hexdigest()
-        return int(h[:8], 16) % 1_000_000
-
-    threshold = int(test_holdout * 1_000_000)
-    with_bucket = cohort.with_columns(
-        pl.col("person_id").map_elements(_bucket, return_dtype=pl.Int64).alias("_bucket")
-    )
-    test = with_bucket.filter(pl.col("_bucket") < threshold).drop("_bucket").sort("person_id")
-    finetune = with_bucket.filter(pl.col("_bucket") >= threshold).drop("_bucket").sort("person_id")
-    return finetune, test
+    return _hash_split(cohort, test_holdout, seed)
 
 
 def _split_stats(report: StepReport, name: str, df: pl.DataFrame) -> None:
@@ -182,6 +198,12 @@ def main(argv: list[str] | None = None) -> int:
                         help="Fraction of patients held out for the test set (default: 0.1)")
     parser.add_argument("--split-seed", type=int, default=42,
                         help="Seed for the patient-level finetune/test split (default: 42)")
+    parser.add_argument("--splits-output", default=str(paths.COHORT_SPLITS_FILE),
+                        help="Output parquet with the canonical train/val/test split per patient")
+    parser.add_argument("--val-fraction", type=float, default=0.1,
+                        help="Fraction of the fine-tune cohort assigned to val (default: 0.1)")
+    parser.add_argument("--val-seed", type=int, default=43,
+                        help="Seed for the train/val split; differs from --split-seed so hash orders are independent")
     parser.add_argument("--gap-days", type=int, default=365, help="Lead time between index_date and first AD dx")
     parser.add_argument("--min-history-days", type=int, default=182, help="Required history before index_date")
     parser.add_argument("--tokenized-dataset-path", default=str(paths.PRETRAIN_PREPARED_DIR))
@@ -222,12 +244,17 @@ def main(argv: list[str] | None = None) -> int:
     if not (0 < args.test_holdout < 1):
         report.add_check("test-holdout in (0, 1)", False, detail=f"test_holdout={args.test_holdout}")
         return _finalize(report, args.report_dir)
+    if not (0 < args.val_fraction < 1):
+        report.add_check("val-fraction in (0, 1)", False, detail=f"val_fraction={args.val_fraction}")
+        return _finalize(report, args.report_dir)
 
     # --- patient-level finetune/test split -----------------------------------
     finetune_path = Path(args.finetune_output)
     test_path = Path(args.test_output)
     report.add_metric("test_holdout", args.test_holdout)
     report.add_metric("split_seed", args.split_seed)
+    report.add_metric("val_fraction", args.val_fraction)
+    report.add_metric("val_seed", args.val_seed)
 
     if cohort.height > 0:
         finetune_df, test_df = split_finetune_test(cohort, args.test_holdout, args.split_seed)
@@ -248,6 +275,20 @@ def main(argv: list[str] | None = None) -> int:
             report.add_artifact(path)
         report.ok("finetune & test cohorts written",
                   detail=f"{finetune_path}  |  {test_path}")
+
+        train_df, val_df = split_train_val(finetune_df, args.val_fraction, args.val_seed)
+        splits_df = build_splits_table(train_df, val_df, test_df)
+        report.add_check("train/val/test cover the cohort exactly",
+                         splits_df.height == cohort.height and splits_df["person_id"].n_unique() == cohort.height,
+                         detail=f"{splits_df.height} rows for {cohort.height} patients")
+        _split_stats(report, "split_train", train_df)
+        _split_stats(report, "split_val", val_df)
+        _split_stats(report, "split_test", test_df)
+        splits_path = Path(args.splits_output)
+        splits_path.parent.mkdir(parents=True, exist_ok=True)
+        splits_df.write_parquet(splits_path)
+        report.add_artifact(splits_path)
+        report.ok("canonical splits written", detail=str(splits_path))
 
     return _finalize(report, args.report_dir)
 

@@ -95,6 +95,7 @@ def test_step06_prepare_finetuning_data(step, omop_dir, tmp_path):
         "--data-dir", str(omop_dir),
         "--finetune-output", str(ft),
         "--test-output", str(te),
+        "--splits-output", str(tmp_path / "splits.parquet"),
         "--skip-tokenized-check",
         "--report-dir", str(rep),
     ])

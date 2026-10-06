@@ -58,6 +58,8 @@ COHORT_FINETUNE_DIR = COHORT_DIR / "finetune"
 COHORT_TEST_DIR = COHORT_DIR / "test"
 COHORT_FINETUNE_FILE = COHORT_FINETUNE_DIR / "cohort.parquet"
 COHORT_TEST_FILE = COHORT_TEST_DIR / "cohort.parquet"
+# One row per cohort patient with split in {train, val, test}; test equals COHORT_TEST_FILE.
+COHORT_SPLITS_FILE = COHORT_DIR / "splits.parquet"
 
 
 def report_dir_for(step_name: str) -> Path:
