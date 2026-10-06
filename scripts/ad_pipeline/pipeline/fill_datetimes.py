@@ -2,7 +2,9 @@
 
 Files are rewritten one at a time with polars streaming (bounded memory), into a temporary
 file next to the original, verified, then atomically swapped in. Non-null datetimes are
-never changed, so a second run is a no-op.
+never changed. Every handled column is written as a UTC-adjusted timestamp: Spark 3.1 reads
+Parquet ``Timestamp(isAdjustedToUTC=false)`` as a plain long, which corrupts ages and event
+times in cehrbert_data. A second run is a no-op once all columns are UTC-adjusted and filled.
 """
 
 from __future__ import annotations
@@ -13,11 +15,13 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 import polars as pl
+import pyarrow as pa
 import pyarrow.parquet as pq
 
 # Must not end in .parquet, so an interrupted run never leaves a file the table glob picks up.
 TMP_SUFFIX = ".fill_tmp"
 DERIVED_SUBPATH = Path("data") / "derived"
+BATCH_ROWS = 500_000
 BIRTH_COLUMN = ("person", "birth_datetime")
 
 
@@ -30,6 +34,7 @@ class ColumnStats:
     nulls_before: int = 0
     filled: int = 0
     nulls_after: int = 0
+    tz_converted: bool = False  # some file had this column without a UTC time zone
 
 
 @dataclass
@@ -72,13 +77,14 @@ def fill_expr(table: str, column: str, schema: Dict[str, pl.DataType]) -> Tuple[
     """Return (fill value cast to the column's dtype, source description).
 
     Returns (None, reason) when the column cannot be handled. An all-null column stored
-    with the Null type becomes Datetime("us"); any other non-datetime dtype is refused.
+    with the Null type becomes Datetime("us", "UTC"); a naive datetime column is moved to
+    UTC (same wall-clock value); any other non-datetime dtype is refused.
     """
     dtype = schema[column]
     if dtype == pl.Null:
-        target: pl.DataType = pl.Datetime("us")
+        target: pl.DataType = pl.Datetime("us", "UTC")
     elif isinstance(dtype, pl.Datetime):
-        target = dtype
+        target = pl.Datetime(dtype.time_unit, dtype.time_zone or "UTC")
     else:
         return None, f"unsupported dtype {dtype} (expected a datetime type)"
 
@@ -110,6 +116,11 @@ def fill_expr(table: str, column: str, schema: Dict[str, pl.DataType]) -> Tuple[
     return value, source
 
 
+def needs_tz(dtype: pl.DataType) -> bool:
+    """True when the column is not stored as a UTC-adjusted timestamp yet."""
+    return dtype == pl.Null or (isinstance(dtype, pl.Datetime) and dtype.time_zone is None)
+
+
 def _null_counts(path: Path, exprs: Dict[str, pl.Expr]) -> Dict[str, int]:
     row = pl.scan_parquet(path).select([e.alias(c) for c, e in exprs.items()]).collect()
     return {c: int(row[c][0]) for c in exprs}
@@ -135,16 +146,18 @@ def process_table(data_dir: Path, table: str, dry_run: bool) -> TableResult:
 
         n_rows = pq.ParquetFile(path).metadata.num_rows
         before = _null_counts(path, {c: pl.col(c).null_count() for c in fills})
-        todo = [c for c in fills if before[c] > 0]
+        todo = [c for c in fills if before[c] > 0 or needs_tz(schema[c])]
         for c in fills:
             result.columns[c].rows += n_rows
             result.columns[c].nulls_before += before[c]
+            result.columns[c].tz_converted |= needs_tz(schema[c])
 
         if not todo:
             after = before
         elif dry_run:
             fillable = _null_counts(
-                path, {c: pl.when(pl.col(c).is_null()).then(fills[c]).is_not_null().sum() for c in todo}
+                path,
+                {c: pl.when(pl.col(c).is_null()).then(fills[c]).is_not_null().sum() for c in todo if before[c] > 0},
             )
             after = {c: before[c] - fillable.get(c, 0) for c in fills}
         else:
@@ -162,11 +175,19 @@ def _rewrite(
     path: Path, fills: Dict[str, pl.Expr], todo: List[str], schema: Dict[str, pl.DataType], n_rows: int
 ) -> Dict[str, int]:
     tmp = path.with_name(path.name + TMP_SUFFIX)
+    exprs = [_target_expr(c, fills[c], schema[c]).alias(c) for c in todo]
     try:
-        lf = pl.scan_parquet(path).with_columns(
-            [(fills[c] if schema[c] == pl.Null else pl.coalesce(pl.col(c), fills[c])).alias(c) for c in todo]
-        )
-        lf.sink_parquet(tmp, compression="snappy")
+        # Written with pyarrow, not polars: polars omits the legacy TIMESTAMP_MICROS converted type,
+        # and Spark 3.1 (parquet-mr 1.10) then reads the column as a long even when UTC-adjusted.
+        source = pq.ParquetFile(path)
+        out_schema = source.schema_arrow
+        for c in todo:
+            unit = schema[c].time_unit if isinstance(schema[c], pl.Datetime) else "us"
+            out_schema = out_schema.set(out_schema.get_field_index(c), pa.field(c, pa.timestamp(unit, "UTC")))
+        with pq.ParquetWriter(tmp, out_schema, compression="snappy") as writer:
+            for batch in source.iter_batches(batch_size=BATCH_ROWS):
+                frame = pl.from_arrow(pa.Table.from_batches([batch])).lazy().with_columns(exprs).collect()
+                writer.write_table(frame.to_arrow().cast(out_schema))
         if pq.ParquetFile(tmp).metadata.num_rows != n_rows:
             raise RuntimeError(f"row count mismatch rewriting {path}")
         after = _null_counts(tmp, {c: pl.col(c).null_count() for c in fills})
@@ -175,3 +196,13 @@ def _rewrite(
     finally:
         if tmp.exists():
             tmp.unlink()
+
+
+def _target_expr(column: str, fill: pl.Expr, dtype: pl.DataType) -> pl.Expr:
+    if dtype == pl.Null:
+        return fill
+    current = pl.col(column)
+    if needs_tz(dtype):
+        # replace, not convert: keep the wall-clock value and call it UTC
+        current = current.dt.replace_time_zone("UTC")
+    return pl.coalesce(current, fill)
