@@ -6,7 +6,10 @@ import numpy as np
 import torch
 from torch.nn.utils.rnn import pad_sequence
 
-from cehrbert.data_generators.hf_data_generator.hf_dataset_mapping import DEMOGRAPHIC_PROMPT_LENGTH, TruncationType
+from cehrbert.data_generators.hf_data_generator.hf_dataset_mapping import (
+    TruncationType,
+    demographic_prompt_length_from_ages,
+)
 from cehrbert.models.hf_models.tokenization_hf_cehrbert import CehrBertTokenizer
 
 
@@ -208,16 +211,12 @@ class CehrBertDataCollator:
     def _demographic_prompt_length(self, record: Dict[str, Any]) -> int:
         """Length of the leading demographic prompt when it must survive tail truncation, else 0.
 
-        The prompt tokens are the only ones with age -1, so that is what identifies them here
-        (token ids of rare years and ages can be out of vocabulary).
+        The prompt is 4 tokens, or 2 (gender and race) when the first visit is after the index date.
         """
         if not self.keep_demographic_prompt or self.truncate_type != TruncationType.TAIL:
             return 0
         ages = record.get("ages")
-        if ages is None or len(ages) <= DEMOGRAPHIC_PROMPT_LENGTH:
-            return 0
-        head = np.asarray(ages[:DEMOGRAPHIC_PROMPT_LENGTH])
-        return DEMOGRAPHIC_PROMPT_LENGTH if bool((head == -1).all()) else 0
+        return 0 if ages is None else demographic_prompt_length_from_ages(ages)
 
     @staticmethod
     def _concat(head, tail):

@@ -704,6 +704,8 @@ class HFTokenizationMapping(DatasetMapping):
 # Sequences generated with --gpt_patient_sequence start with year, age, gender and race tokens.
 # They carry age -1 and the epoch time of the first visit.
 DEMOGRAPHIC_PROMPT_LENGTH = 4
+# Positions of the gender and race tokens, the only prompt tokens that do not describe the first visit.
+DEMOGRAPHIC_PROMPT_STATIC_POSITIONS = (2, 3)
 
 
 def has_demographic_prompt(concept_ids) -> bool:
@@ -713,6 +715,18 @@ def has_demographic_prompt(concept_ids) -> bool:
         and str(concept_ids[0]).startswith("year:")
         and str(concept_ids[1]).startswith("age:")
     )
+
+
+def demographic_prompt_length_from_ages(ages) -> int:
+    """Length of the leading prompt kept by ``keep_demographic_prompt``: 4, 2 (gender and race only) or 0.
+
+    The prompt tokens are the only ones with age -1, which also covers year and age tokens that
+    are out of vocabulary.
+    """
+    for length in (DEMOGRAPHIC_PROMPT_LENGTH, len(DEMOGRAPHIC_PROMPT_STATIC_POSITIONS)):
+        if len(ages) >= length and bool((np.asarray(ages[:length]) == -1).all()):
+            return length
+    return 0
 
 
 class ExtractTokenizedSequenceDataMapping:
@@ -787,17 +801,26 @@ class ExtractTokenizedSequenceDataMapping:
                 start_age = -1
             batched_samples["age_at_index"].append(start_age)
             selected = observation_window_index
+            leaking_epoch_positions = 0
             if prompt_length:
-                # The prompt is dated at the first visit. Never keep it when that is after the window
-                # end (the in-window part is then empty too), so it cannot carry post-index information.
-                keep_prompt = bool(np.max(np.asarray(record["epoch_times"])[:prompt_length]) <= index_date)
                 in_window = observation_window_index.copy()
                 in_window[:prompt_length] = False
-                selected = np.concatenate(
-                    [np.arange(prompt_length if keep_prompt else 0), np.flatnonzero(in_window)]
-                ).astype(np.int64)
+                if np.max(np.asarray(record["epoch_times"])[:prompt_length]) <= index_date:
+                    head = np.arange(prompt_length)
+                else:
+                    # The first visit is after the window end, so year and age (which describe it) are
+                    # dropped. Gender and race do not change over time, so they are kept.
+                    head = np.asarray(DEMOGRAPHIC_PROMPT_STATIC_POSITIONS)
+                    leaking_epoch_positions = len(head)
+                selected = np.concatenate([head, np.flatnonzero(in_window)]).astype(np.int64)
             for time_series_column in time_series_columns:
-                batched_samples[time_series_column].append(np.asarray(record[time_series_column])[selected])
+                values = np.asarray(record[time_series_column])[selected]
+                if leaking_epoch_positions and time_series_column == "epoch_times":
+                    # The only prompt column that encodes the post-index first visit. dates, ages,
+                    # visit_concept_orders and visit_segments are 0 or -1 on the prompt tokens.
+                    values = values.copy()
+                    values[:leaking_epoch_positions] = index_date
+                batched_samples[time_series_column].append(values)
         return batched_samples
 
     def batch_transform(self, record: Dict[str, Any]) -> Dict[str, Any]:

@@ -84,6 +84,16 @@ class TestKeepDemographicPromptTruncation(unittest.TestCase):
         self.assertEqual(result["ages"][:4], [-1] * 4)
         self.assertEqual(len(result["ages"]), len(result["input_ids"]))
 
+    def test_two_token_prompt_survives_tail_truncation(self):
+        record = {"input_ids": self.record["input_ids"][2:], "ages": self.record["ages"][2:]}
+        result = self.collator.generate_start_end_index(record)
+        # 9 tokens after [CLS]: 2 prompt tokens plus at most 7 recent ones, from a [VS] token.
+        self.assertEqual(result["input_ids"][:2], [102, 103])
+        self.assertEqual(result["input_ids"][2], 2)
+        self.assertEqual(result["input_ids"][-1], record["input_ids"][-1])
+        self.assertLessEqual(len(result["input_ids"]), 9)
+        self.assertEqual(result["ages"][:3], [-1, -1, 70])
+
     def test_without_option_prompt_is_dropped(self):
         self.collator.keep_demographic_prompt = False
         result = self.collator.generate_start_end_index(self.record)

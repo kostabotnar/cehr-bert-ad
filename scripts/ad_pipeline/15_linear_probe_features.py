@@ -11,14 +11,15 @@ tokens). Step 16 trains a logistic regression on them.
 Context longer than ``--ctx`` tokens is cut to the most recent tokens by the collator; the
 number and share of such patients is reported per split. With ``keep_demographic_prompt`` in
 the fine-tune config, the four leading demographic tokens (year, age, gender, race) are kept
-for every patient whatever the window and survive truncation. "Empty window" still means no
+for every patient whatever the window and survive truncation. When the first visit is after the
+index date only the gender and race tokens are kept (2 tokens). "Empty window" still means no
 in-window event tokens, not counting those four.
 
 Outputs (under build/<run_label>/linear_probe/features/<split>/)
   features_cls.npy, features_mean.npy    float32, N x hidden size
   meta.parquet                           person_id, index_date, label,
                                          n_tokens_before_truncation, truncated,
-                                         n_event_tokens, demographic_prompt_in_input
+                                         n_event_tokens, demographic_prompt_tokens
   build/<run_label>/reports/15_linear_probe_features/{status.json,report.md}
 
 Usage
@@ -173,7 +174,10 @@ def main(argv: list[str] | None = None) -> int:
         report.add_metric(f"{name}_truncated", n_trunc)
         report.add_metric(f"{name}_truncated_share", round(n_trunc / max(len(feats.person_id), 1), 4))
         report.add_metric(f"{name}_empty_windows", int((feats.n_event_tokens == 0).sum()))
-        report.add_metric(f"{name}_demographic_prompt_in_input", int(feats.demographic_prompt_in_input.sum()))
+        for n_prompt in (0, 2, 4):
+            report.add_metric(
+                f"{name}_prompt_tokens_{n_prompt}", int((feats.demographic_prompt_tokens == n_prompt).sum())
+            )
         report.add_metric(f"{name}_seconds", round(time.time() - start, 1))
         report.add_check(
             f"{name}: features are finite",

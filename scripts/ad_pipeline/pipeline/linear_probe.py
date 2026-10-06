@@ -146,8 +146,8 @@ class ExtractedFeatures:
     truncated: np.ndarray
     # In-window event tokens, not counting the demographic prompt. Zero means an empty window.
     n_event_tokens: np.ndarray
-    # Whether the four demographic prompt tokens are in the model input after truncation.
-    demographic_prompt_in_input: np.ndarray
+    # Demographic prompt tokens in the model input after truncation: 4, 2 (gender and race only) or 0.
+    demographic_prompt_tokens: np.ndarray
 
 
 def _batches(dataset, batch_size: int) -> Iterable[list[dict]]:
@@ -202,15 +202,16 @@ def extract_features(
     collator keeps ``max_length - 1`` record tokens, prompt included, so a patient is
     ``truncated`` when ``n_tokens_before_truncation > max_length - 1``.
 
-    ``n_event_tokens`` excludes the prompt tokens, so an empty window (no in-window events) is
-    ``n_event_tokens == 0`` even though such a patient is still encoded as [CLS] plus the prompt.
+    ``n_event_tokens`` excludes the prompt tokens (4, or 2 when the first visit is after the index
+    date), so an empty window (no in-window events) is ``n_event_tokens == 0`` even though such a
+    patient is still encoded as [CLS] plus the prompt.
     Only a record with no tokens at all (no prompt either) is encoded as a [CLS]-only sequence.
     """
     from cehrbert.data_generators.hf_data_generator.hf_dataset_collator import CehrBertDataCollator
 
     from cehrbert.data_generators.hf_data_generator.hf_dataset_mapping import (
         DEMOGRAPHIC_PROMPT_LENGTH,
-        has_demographic_prompt,
+        demographic_prompt_length_from_ages,
     )
 
     collator = CehrBertDataCollator(
@@ -218,7 +219,7 @@ def extract_features(
     )
     model.eval()
     cls_parts, mean_parts = [], []
-    person_ids, labels, n_tokens, n_events, prompt_flags = [], [], [], [], []
+    person_ids, labels, n_tokens, n_events, prompt_counts = [], [], [], [], []
     hidden_size = model.config.hidden_size
     done = 0
     n_batches = 0
@@ -227,12 +228,7 @@ def extract_features(
         labels.extend(int(r["classifier_label"]) for r in records)
         n_tokens.extend(len(r["input_ids"]) for r in records)
         n_events.extend(
-            len(r["input_ids"])
-            - (
-                DEMOGRAPHIC_PROMPT_LENGTH
-                if keep_demographic_prompt and has_demographic_prompt(r.get("concept_ids", []))
-                else 0
-            )
+            len(r["input_ids"]) - (demographic_prompt_length_from_ages(r["ages"]) if keep_demographic_prompt else 0)
             for r in records
         )
         # Rows with no tokens at all never reach the collator: torch.tensor([]) is float32, which
@@ -242,7 +238,7 @@ def extract_features(
         nonempty = [i for i, r in enumerate(records) if len(r["input_ids"]) > 0]
         empty = [i for i, r in enumerate(records) if len(r["input_ids"]) == 0]
         cls = np.zeros((len(records), hidden_size), dtype=np.float32)
-        has_prompt = np.zeros(len(records), dtype=bool)
+        prompt_tokens = np.zeros(len(records), dtype=np.int64)
         mean = np.zeros((len(records), hidden_size), dtype=np.float32)
         cls_idx = tokenizer.cls_token_index
         if nonempty:
@@ -252,12 +248,15 @@ def extract_features(
             if batch["input_ids"].dtype != torch.long:
                 raise AssertionError(f"collator produced input_ids of dtype {batch['input_ids'].dtype}")
             # Position 0 is [CLS]; the prompt tokens are the only ones with age -1.
-            has_prompt[nonempty] = (batch["ages"][:, 1 : 1 + DEMOGRAPHIC_PROMPT_LENGTH] == -1).all(dim=1).numpy()
+            ages = batch["ages"][:, 1 : 1 + DEMOGRAPHIC_PROMPT_LENGTH]
+            four = (ages == -1).all(dim=1)
+            two = (ages[:, :2] == -1).all(dim=1)
+            prompt_tokens[nonempty] = torch.where(four, 4, torch.where(two, 2, 0)).numpy()
             cls[nonempty], mean[nonempty] = _encode(model, batch, cls_idx, device, amp_dtype)
         if empty:
             batch = cls_only_batch(len(empty), cls_idx)
             cls[empty], mean[empty] = _encode(model, batch, cls_idx, device, amp_dtype)
-        prompt_flags.append(has_prompt & keep_demographic_prompt)
+        prompt_counts.append(prompt_tokens if keep_demographic_prompt else prompt_tokens * 0)
         cls_parts.append(cls)
         mean_parts.append(mean)
         done += len(records)
@@ -274,7 +273,7 @@ def extract_features(
         n_tokens_before_truncation=n_tokens_arr,
         truncated=n_tokens_arr > (max_length - 1),
         n_event_tokens=np.asarray(n_events, dtype=np.int64),
-        demographic_prompt_in_input=np.concatenate(prompt_flags) if prompt_flags else np.zeros(0, dtype=bool),
+        demographic_prompt_tokens=np.concatenate(prompt_counts) if prompt_counts else np.zeros(0, dtype=np.int64),
     )
 
 
@@ -295,7 +294,7 @@ def save_split_features(out_dir: str | Path, feats: ExtractedFeatures, index_dat
             "n_tokens_before_truncation": feats.n_tokens_before_truncation,
             "truncated": feats.truncated.astype(bool),
             "n_event_tokens": feats.n_event_tokens,
-            "demographic_prompt_in_input": feats.demographic_prompt_in_input.astype(bool),
+            "demographic_prompt_tokens": feats.demographic_prompt_tokens,
         }
     )
     meta_path = out / "meta.parquet"

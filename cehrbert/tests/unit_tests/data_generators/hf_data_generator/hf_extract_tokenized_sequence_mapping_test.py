@@ -29,7 +29,7 @@ def make_record(person_id=1, with_prompt=True, first_visit_day=100, event_days=(
         "input_ids": list(range(10, 10 + n)),
         "ages": ages,
         "epoch_times": epochs,
-        "visit_concept_orders": list(range(n)),
+        "visit_concept_orders": [0] * (4 if with_prompt else 0) + list(range(1, len(event_days) + 1)),
         "concept_values": [0.0] * n,
         "num_of_visits": 3,
     }
@@ -51,7 +51,7 @@ class TestKeepDemographicPrompt(unittest.TestCase):
         self.assertEqual(list(out["concept_ids"]), ["year:2015", "age:76", "8507", "8516", "c700", "c999"])
         self.assertEqual(list(out["input_ids"]), [10, 11, 12, 13, 16, 17])
         self.assertEqual(list(out["ages"]), [-1, -1, -1, -1, 76, 76])
-        self.assertEqual(list(out["visit_concept_orders"]), [0, 1, 2, 3, 6, 7])
+        self.assertEqual(list(out["visit_concept_orders"]), [0, 0, 0, 0, 3, 4])
         self.assertEqual(list(out["epoch_times"])[:4], [100 * DAY] * 4)
         for column in ("concept_ids", "input_ids", "ages", "epoch_times", "visit_concept_orders", "concept_values"):
             self.assertEqual(len(out[column]), 6, column)
@@ -69,11 +69,30 @@ class TestKeepDemographicPrompt(unittest.TestCase):
         self.assertEqual(list(on["concept_ids"]), ["year:2015", "age:76", "8507", "8516", "c850", "c900"])
         self.assertEqual(list(on["concept_ids"]), list(off["concept_ids"]))
 
-    def test_prompt_dated_after_window_end_is_dropped(self):
+    def test_prompt_dated_after_window_end_keeps_only_gender_and_race(self):
+        record = make_record(first_visit_day=1200, event_days=(700, 999, 1300))
+        out = run(record, keep=True)
+        self.assertEqual(list(out["concept_ids"]), ["8507", "8516", "c700", "c999"])
+        self.assertEqual(list(out["input_ids"]), [12, 13, 14, 15])
+        self.assertEqual(list(out["ages"]), [-1, -1, 76, 76])
+        self.assertEqual(list(out["visit_concept_orders"][:2]), [0, 0])
+        for column in ("concept_ids", "input_ids", "ages", "epoch_times", "visit_concept_orders", "concept_values"):
+            self.assertEqual(len(out[column]), 4, column)
+
+    def test_post_index_prompt_does_not_leak_first_visit_time(self):
+        record = make_record(first_visit_day=1200, event_days=(700, 1300))
+        out = run(record, keep=True)
+        epochs = list(out["epoch_times"])
+        # No kept value is later than the window end, and the two prompt tokens sit at the index date.
+        self.assertLessEqual(max(epochs), INDEX)
+        self.assertEqual(epochs[:2], [INDEX, INDEX])
+        self.assertNotIn(1200 * DAY, epochs)
+
+    def test_post_index_prompt_without_in_window_events(self):
         record = make_record(first_visit_day=1200, event_days=(1300,))
         out = run(record, keep=True)
-        self.assertEqual(len(out["concept_ids"]), 0)
-        self.assertEqual(len(out["epoch_times"]), 0)
+        self.assertEqual(list(out["concept_ids"]), ["8507", "8516"])
+        self.assertEqual(list(out["epoch_times"]), [INDEX, INDEX])
 
     def test_event_on_index_date_stays_excluded(self):
         record = make_record(event_days=(700, 1000))
