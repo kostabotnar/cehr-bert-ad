@@ -157,6 +157,13 @@ class DataTrainingArguments:
             "is calculated as prediction time subtracted by observation_window",
         },
     )
+    keep_demographic_prompt: Optional[bool] = dataclasses.field(
+        default=False,
+        metadata={
+            "help": "Always keep the leading demographic prompt tokens (year, age, gender, race) when "
+            "extracting the observation window, and keep them when the collator truncates a sequence."
+        },
+    )
     streaming: Optional[bool] = dataclasses.field(
         default=False,
         metadata={"help": "The boolean indicator to indicate whether the data should be streamed"},

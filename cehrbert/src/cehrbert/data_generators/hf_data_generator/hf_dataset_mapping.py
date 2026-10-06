@@ -701,14 +701,46 @@ class HFTokenizationMapping(DatasetMapping):
         return record
 
 
+# Sequences generated with --gpt_patient_sequence start with year, age, gender and race tokens.
+# They carry age -1 and the epoch time of the first visit.
+DEMOGRAPHIC_PROMPT_LENGTH = 4
+# Positions of the gender and race tokens, the only prompt tokens that do not describe the first visit.
+DEMOGRAPHIC_PROMPT_STATIC_POSITIONS = (2, 3)
+
+
+def has_demographic_prompt(concept_ids) -> bool:
+    """True when the sequence starts with the [year:, age:, gender, race] prompt tokens."""
+    return (
+        len(concept_ids) >= DEMOGRAPHIC_PROMPT_LENGTH
+        and str(concept_ids[0]).startswith("year:")
+        and str(concept_ids[1]).startswith("age:")
+    )
+
+
+def demographic_prompt_length_from_ages(ages) -> int:
+    """Length of the leading prompt kept by ``keep_demographic_prompt``: 4, 2 (gender and race only) or 0.
+
+    The prompt tokens are the only ones with age -1, which also covers year and age tokens that
+    are out of vocabulary.
+    """
+    for length in (DEMOGRAPHIC_PROMPT_LENGTH, len(DEMOGRAPHIC_PROMPT_STATIC_POSITIONS)):
+        if len(ages) >= length and bool((np.asarray(ages[:length]) == -1).all()):
+            return length
+    return 0
+
+
 class ExtractTokenizedSequenceDataMapping:
     def __init__(
         self,
         person_index_date_map: Dict[int, List[Dict[str, Any]]],
         observation_window: int = 0,
+        keep_demographic_prompt: bool = False,
     ):
         self.person_index_date_map = person_index_date_map
         self.observation_window = observation_window
+        # Keep the leading demographic prompt tokens whatever the window. The first visit is
+        # usually far outside the window, so these tokens would otherwise be dropped.
+        self.keep_demographic_prompt = keep_demographic_prompt
 
     def _calculate_prediction_start_time(self, prediction_time: float):
         if self.observation_window and self.observation_window > 0:
@@ -749,6 +781,12 @@ class ExtractTokenizedSequenceDataMapping:
             else:
                 static_inputs[k] = v
 
+        prompt_length = (
+            DEMOGRAPHIC_PROMPT_LENGTH
+            if self.keep_demographic_prompt and has_demographic_prompt(record["concept_ids"])
+            else 0
+        )
+
         batched_samples = defaultdict(list)
         for (_, index_date, label), observation_window_index in zip(
             prediction_start_end_times, observation_window_indices
@@ -762,10 +800,27 @@ class ExtractTokenizedSequenceDataMapping:
             except Exception:
                 start_age = -1
             batched_samples["age_at_index"].append(start_age)
+            selected = observation_window_index
+            leaking_epoch_positions = 0
+            if prompt_length:
+                in_window = observation_window_index.copy()
+                in_window[:prompt_length] = False
+                if np.max(np.asarray(record["epoch_times"])[:prompt_length]) <= index_date:
+                    head = np.arange(prompt_length)
+                else:
+                    # The first visit is after the window end, so year and age (which describe it) are
+                    # dropped. Gender and race do not change over time, so they are kept.
+                    head = np.asarray(DEMOGRAPHIC_PROMPT_STATIC_POSITIONS)
+                    leaking_epoch_positions = len(head)
+                selected = np.concatenate([head, np.flatnonzero(in_window)]).astype(np.int64)
             for time_series_column in time_series_columns:
-                batched_samples[time_series_column].append(
-                    np.asarray(record[time_series_column])[observation_window_index]
-                )
+                values = np.asarray(record[time_series_column])[selected]
+                if leaking_epoch_positions and time_series_column == "epoch_times":
+                    # The only prompt column that encodes the post-index first visit. dates, ages,
+                    # visit_concept_orders and visit_segments are 0 or -1 on the prompt tokens.
+                    values = values.copy()
+                    values[:leaking_epoch_positions] = index_date
+                batched_samples[time_series_column].append(values)
         return batched_samples
 
     def batch_transform(self, record: Dict[str, Any]) -> Dict[str, Any]:

@@ -6,7 +6,10 @@ import numpy as np
 import torch
 from torch.nn.utils.rnn import pad_sequence
 
-from cehrbert.data_generators.hf_data_generator.hf_dataset_mapping import TruncationType
+from cehrbert.data_generators.hf_data_generator.hf_dataset_mapping import (
+    TruncationType,
+    demographic_prompt_length_from_ages,
+)
 from cehrbert.models.hf_models.tokenization_hf_cehrbert import CehrBertTokenizer
 
 
@@ -18,8 +21,11 @@ class CehrBertDataCollator:
         mlm_probability: float = 0.15,
         is_pretraining: bool = True,
         truncate_type: TruncationType = TruncationType.RANDOM_RIGHT_TRUNCATION,
+        keep_demographic_prompt: bool = False,
     ):
         self.tokenizer = tokenizer
+        # In non-pretraining mode, keep the leading demographic prompt tokens when truncating to the tail.
+        self.keep_demographic_prompt = keep_demographic_prompt
         self.max_length = max_length
         self.mlm_probability = mlm_probability
         self.is_pretraining = is_pretraining
@@ -202,6 +208,24 @@ class CehrBertDataCollator:
         # The rest of the time (10% of the time) we keep the masked input tokens unchanged
         return inputs, labels
 
+    def _demographic_prompt_length(self, record: Dict[str, Any]) -> int:
+        """Length of the leading demographic prompt when it must survive tail truncation, else 0.
+
+        The prompt is 4 tokens, or 2 (gender and race) when the first visit is after the index date.
+        """
+        if not self.keep_demographic_prompt or self.truncate_type != TruncationType.TAIL:
+            return 0
+        ages = record.get("ages")
+        return 0 if ages is None else demographic_prompt_length_from_ages(ages)
+
+    @staticmethod
+    def _concat(head, tail):
+        if isinstance(head, torch.Tensor):
+            return torch.cat([head, tail])
+        if isinstance(head, np.ndarray):
+            return np.concatenate([head, tail])
+        return list(head) + list(tail)
+
     def generate_start_end_index(
         self, record: Dict[str, Any], max_length_allowed: Optional[int] = None
     ) -> Dict[str, Any]:
@@ -213,6 +237,7 @@ class CehrBertDataCollator:
         sample_packing = getattr(self, "sample_packing", False)
         max_length_allowed = self.max_length if max_length_allowed is None else max_length_allowed
         seq_length = len(record["input_ids"])
+        prompt_length = 0
         # Subtract one for the [CLS] token
         new_max_length = max_length_allowed if sample_packing else max_length_allowed - 1
 
@@ -263,7 +288,8 @@ class CehrBertDataCollator:
                         end_index = i
                         break
         else:
-            start_index = max(0, seq_length - new_max_length)
+            prompt_length = self._demographic_prompt_length(record) if not sample_packing else 0
+            start_index = max(prompt_length, seq_length - (new_max_length - prompt_length))
             end_index = seq_length
             for i in range(start_index, seq_length):
                 current_token = record["input_ids"][i]
@@ -275,7 +301,10 @@ class CehrBertDataCollator:
         for k, v in record.items():
             if isinstance(v, list) or isinstance(v, np.ndarray) or (isinstance(v, torch.Tensor) and v.dim() > 0):
                 if len(v) == seq_length:
-                    new_record[k] = v[start_index:end_index]
+                    if prompt_length:
+                        new_record[k] = self._concat(v[:prompt_length], v[start_index:end_index])
+                    else:
+                        new_record[k] = v[start_index:end_index]
             else:
                 new_record[k] = v
         return new_record

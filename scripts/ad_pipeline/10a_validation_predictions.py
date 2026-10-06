@@ -222,6 +222,7 @@ def run_validation_predictions(
         ),
         is_pretraining=False,
         mlm_probability=config.mlm_probability,
+        keep_demographic_prompt=bool(data_args.keep_demographic_prompt),
     )
 
     # --- build the DataLoader for the validation split (mirrors do_predict block) ----------

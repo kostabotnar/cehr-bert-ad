@@ -9,12 +9,17 @@ pretrained encoder (no fine-tuning), and pooled into two feature sets (see
 tokens). Step 16 trains a logistic regression on them.
 
 Context longer than ``--ctx`` tokens is cut to the most recent tokens by the collator; the
-number and share of such patients is reported per split.
+number and share of such patients is reported per split. With ``keep_demographic_prompt`` in
+the fine-tune config, the four leading demographic tokens (year, age, gender, race) are kept
+for every patient whatever the window and survive truncation. When the first visit is after the
+index date only the gender and race tokens are kept (2 tokens). "Empty window" still means no
+in-window event tokens, not counting those four.
 
 Outputs (under build/<run_label>/linear_probe/features/<split>/)
   features_cls.npy, features_mean.npy    float32, N x hidden size
   meta.parquet                           person_id, index_date, label,
-                                         n_tokens_before_truncation, truncated
+                                         n_tokens_before_truncation, truncated,
+                                         n_event_tokens, demographic_prompt_tokens
   build/<run_label>/reports/15_linear_probe_features/{status.json,report.md}
 
 Usage
@@ -123,6 +128,8 @@ def main(argv: list[str] | None = None) -> int:
     datasets.disable_caching()
     tokenizer = CehrBertTokenizer.from_pretrained(args.model_dir)
     model = lp.load_frozen_model(args.model_dir, device=args.device)
+    keep_prompt = lp.keep_demographic_prompt_from_config(args.finetune_config)
+    report.add_metric("keep_demographic_prompt", keep_prompt)
     report.add_metric("hidden_size", int(model.config.hidden_size))
 
     work_root = output_dir / "_work"
@@ -140,6 +147,7 @@ def main(argv: list[str] | None = None) -> int:
             batch_size=args.batch_size,
             device=args.device,
             progress_every=200,
+            keep_demographic_prompt=keep_prompt,
         )
 
         expected_ids = set(frame["person_id"].to_list())
@@ -165,7 +173,11 @@ def main(argv: list[str] | None = None) -> int:
         report.add_metric(f"{name}_rows", int(len(feats.person_id)))
         report.add_metric(f"{name}_truncated", n_trunc)
         report.add_metric(f"{name}_truncated_share", round(n_trunc / max(len(feats.person_id), 1), 4))
-        report.add_metric(f"{name}_empty_windows", int((feats.n_tokens_before_truncation == 0).sum()))
+        report.add_metric(f"{name}_empty_windows", int((feats.n_event_tokens == 0).sum()))
+        for n_prompt in (0, 2, 4):
+            report.add_metric(
+                f"{name}_prompt_tokens_{n_prompt}", int((feats.demographic_prompt_tokens == n_prompt).sum())
+            )
         report.add_metric(f"{name}_seconds", round(time.time() - start, 1))
         report.add_check(
             f"{name}: features are finite",
