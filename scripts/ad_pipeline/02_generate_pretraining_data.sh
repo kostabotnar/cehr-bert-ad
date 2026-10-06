@@ -23,6 +23,12 @@ export SPARK_WORKER_CORES="${SPARK_WORKER_CORES:-8}"
 export SPARK_EXECUTOR_CORES="${SPARK_EXECUTOR_CORES:-2}"
 export SPARK_DRIVER_MEMORY="${SPARK_DRIVER_MEMORY:-16g}"
 export SPARK_EXECUTOR_MEMORY="${SPARK_EXECUTOR_MEMORY:-16g}"
+PYTHON="${PYTHON:-python}"
+# Birth datetimes of 1900-01-01 trip Spark's legacy-calendar guard on Parquet writes; the output is only read
+# by Spark 3 and pyarrow, which both use the proleptic Gregorian calendar, so write values unchanged.
+REBASE="spark.sql.legacy.parquet.int96RebaseModeInWrite=CORRECTED"
+REBASE_DT="spark.sql.legacy.parquet.datetimeRebaseModeInWrite=CORRECTED"
+export PYSPARK_SUBMIT_ARGS="${PYSPARK_SUBMIT_ARGS:---conf ${REBASE} --conf ${REBASE_DT} pyspark-shell}"
 
 echo "Project root : ${PROJECT_ROOT}"
 echo "Input folder : ${INPUT_FOLDER}"
@@ -35,7 +41,7 @@ mkdir -p "${OUTPUT_FOLDER}"
 cd "${PROJECT_ROOT}"
 
 echo "Generating concept list..."
-python -u -m cehrbert_data.apps.generate_included_concept_list \
+"${PYTHON}" -u -m cehrbert_data.apps.generate_included_concept_list \
     -i "${INPUT_FOLDER}" \
     -o "${OUTPUT_FOLDER}" \
     --min_num_of_patients 100 \
@@ -46,7 +52,7 @@ ln -sf "${OUTPUT_FOLDER}/qualified_concept_list" "${INPUT_FOLDER}/qualified_conc
 
 echo ""
 echo "Generating patient sequences..."
-python -m cehrbert_data.apps.generate_training_data \
+"${PYTHON}" -m cehrbert_data.apps.generate_training_data \
     --input_folder "${INPUT_FOLDER}" \
     --output_folder "${OUTPUT_FOLDER}" \
     -d "${START_DATE}" \

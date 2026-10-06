@@ -64,6 +64,7 @@ def main(argv: list[str] | None = None) -> int:
             ["bash", str(WRAPPER)],
             cwd=paths.PROJECT_ROOT,
             env={
+                "PYTHON": sys.executable,
                 "INPUT_FOLDER": str(input_folder),
                 "OUTPUT_FOLDER": str(output_folder),
                 "START_DATE": args.start_date,
