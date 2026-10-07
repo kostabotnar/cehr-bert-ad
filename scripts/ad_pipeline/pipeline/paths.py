@@ -57,6 +57,9 @@ VAL_PREDICTIONS_DIR = FINETUNE_RESULTS_DIR / "validation_predictions"
 # build/<run_label>/ (see run_label / the label-aware *_dir functions below).
 BUILD_DIR = PROJECT_ROOT / "build"
 
+# Raw OMOP profile (step 18): tables, figures and exclusion flow of AD cases versus controls.
+OMOP_PROFILE_DIR = BUILD_DIR / "omop_profile"
+
 # Defaults for the experiment parameters that make up a run label.
 # These match ad_finetune_config.yaml (observation_window) and the pretrained model's
 # max_position_embeddings, so the default label is "w_365_ctx512".
