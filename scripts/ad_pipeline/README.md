@@ -150,6 +150,16 @@ data/
     └── test_results.json               roc_auc, pr_auc, test_loss    (step 9)
 ```
 
+## Raw OMOP profile (step 18)
+
+`python 18_profile_omop.py` profiles the raw OMOP tables for AD cases (index = first AD
+diagnosis) versus controls under two index rules (`control_last_visit` and a seeded
+`control_matched_index` drawn from each control's own visit dates). It reads only the OMOP
+tables, writes `build/omop_profile/` (`profile.json`, `table1.csv`/`.md` with SMDs versus AD,
+`exclusion_flow.csv`, `figures/`) and a report, and changes no cohort file. Concept groups live in
+`configs/omop_profile_concepts.yaml`. Useful options: `--person-sample-fraction 0.02` for a fast
+run, `--skip-sections measurement,duplicates` to drop the heaviest parts, `--date-floor`.
+
 ## Configuration
 
 - `configs/ad_pretrain_config.yaml` — pretraining hyperparameters

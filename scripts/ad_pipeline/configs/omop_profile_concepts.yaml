@@ -1,0 +1,74 @@
+# Concept groups for step 18 (raw OMOP profile of AD cases versus controls).
+#
+# conditions / procedures: group -> item -> {source vocabulary prefix: [code prefixes]}.
+#   A row matches when source_value starts with "<vocabulary>:<code prefix>". A token of the form
+#   "A-B" with the same letter prefix expands to every numeric prefix in between ("E08-E13" gives
+#   E08 ... E13, "401-405" gives 401 ... 405). Prefix semantics: "G30" matches G30, G30.9 and also
+#   G300 (no such ICD-10-CM code exists); "331.0" matches 331.0 and 331.00.
+# drugs: group -> list of lowercase RxNorm ingredient names. Resolved to descendant drug_concept_ids
+#   through concept_ancestor.
+# measurements: group -> item -> list of exact measurement_source_value strings (bare LOINC codes).
+# The groups "dementia_proxies" and "ad_drugs" feed the control contamination section and the
+# exclusion flow.
+
+conditions:
+  comorbidities:
+    hypertension: {ICD-10-CM: [I10-I16], ICD-9-CM: [401-405]}
+    diabetes: {ICD-10-CM: [E08-E13], ICD-9-CM: ["250"]}
+    hyperlipidemia: {ICD-10-CM: [E78], ICD-9-CM: ["272"]}
+    stroke: {ICD-10-CM: [I63, I64], ICD-9-CM: ["434", "436"]}
+    atrial_fibrillation: {ICD-10-CM: [I48], ICD-9-CM: ["427.3"]}
+    depression: {ICD-10-CM: [F32, F33], ICD-9-CM: ["296.2", "296.3", "311"]}
+    anxiety: {ICD-10-CM: [F41], ICD-9-CM: ["300.0"]}
+    hearing_loss: {ICD-10-CM: [H90, H91], ICD-9-CM: ["389"]}
+    traumatic_brain_injury: {ICD-10-CM: [S06], ICD-9-CM: [850-854]}
+    parkinson: {ICD-10-CM: [G20], ICD-9-CM: ["332"]}
+    sleep_disorders: {ICD-10-CM: [G47, F51], ICD-9-CM: ["327", "780.5"]}
+    delirium: {ICD-10-CM: [F05], ICD-9-CM: ["293.0"]}
+    falls: {ICD-10-CM: [W00-W19, R29.6], ICD-9-CM: [E880-E888]}
+    urinary_tract_infection: {ICD-10-CM: [N39.0], ICD-9-CM: ["599.0"]}
+  dementia_proxies:
+    vascular_unspecified_dementia: {ICD-10-CM: [F01, F02, F03], ICD-9-CM: ["290", "294.1", "294.2"]}
+    other_degenerative_nervous: {ICD-10-CM: [G31], ICD-9-CM: ["331.1", "331.2", "331.8"]}
+    symptoms_cognition: {ICD-10-CM: [R41]}
+    mild_cognitive_impairment: {ICD-10-CM: [G31.84], ICD-9-CM: ["331.83"]}
+
+drugs:
+  ad_drugs:
+    - donepezil
+    - rivastigmine
+    - galantamine
+    - memantine
+    - lecanemab
+    - aducanumab
+    - donanemab
+  anticholinergic_benzodiazepine:
+    - oxybutynin
+    - tolterodine
+    - diphenhydramine
+    - hydroxyzine
+    - amitriptyline
+    - lorazepam
+    - alprazolam
+    - diazepam
+    - clonazepam
+    - temazepam
+
+procedures:
+  imaging:
+    brain_mri: {CPT: [70551-70553]}
+    head_ct: {CPT: [70450-70470]}
+    # CPT 78811-78816 are general PET codes, so this is only an approximation of amyloid PET.
+    amyloid_pet_approx: {HCPCS: [A9586, A9599, A9601], CPT: [78811-78816]}
+
+measurements:
+  labs_vitals:
+    bmi: ["39156-5"]
+    systolic_bp: ["8480-6"]
+    hba1c: ["4548-4"]
+    ldl: ["13457-7", "18262-6"]
+    creatinine: ["2160-0"]
+    vitamin_b12: ["2132-9"]
+    tsh: ["3016-3"]
+    mmse: ["72106-8"]
+    moca: ["72172-0"]
