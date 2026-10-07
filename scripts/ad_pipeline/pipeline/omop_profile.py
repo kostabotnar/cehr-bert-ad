@@ -15,9 +15,10 @@ Matched index method (``pick_matched_index``)
 ---------------------------------------------
 Cases are binned into strata of (5-year age band, calendar year) at their index date. For every
 control, each distinct visit date is a candidate pseudo-index with a stratum defined the same way.
-A candidate is weighted by ``case_count(stratum) / candidate_count(stratum)``, so strata with many
-cases are favoured and strata with many candidate visits are not over-represented. One candidate per
-control is drawn with probability proportional to its weight (exponential keys, ``-log(u) / w``,
+A candidate's weight is a per-stratum value fitted by iterative proportional fitting so that the
+expected number of pseudo-indexes per stratum approaches the case distribution (a plain case count
+or case/candidate ratio over-selects rare or early strata). One candidate per control is drawn with
+probability proportional to its weight (exponential keys, ``-log(u) / w``,
 smallest key wins) using a seeded NumPy generator over candidates sorted by (person, date), which
 makes the draw deterministic. A control whose candidates all fall in strata without cases (or who has
 no birth year) is drawn uniformly among its own visit dates and counted in ``n_fallback``.
@@ -313,6 +314,39 @@ def age_band_expr(age: pl.Expr, width: int = AGE_BAND_YEARS) -> pl.Expr:
     return (age / width).floor().cast(pl.Int64) * width
 
 
+def _fit_stratum_weights(cand: pl.DataFrame, strata: pl.DataFrame, n_iter: int = 20) -> pl.DataFrame:
+    """Per-stratum sampling weights ``w`` by iterative proportional fitting.
+
+    Each control picks one of its candidate visits with probability proportional to ``w`` of the
+    candidate's stratum. Starting from the case counts, ``w`` is rescaled so the expected number of
+    pseudo-indexes per stratum approaches the case distribution (scaled to the number of controls).
+    Strata no control can reach keep their last weight.
+    """
+    per_person = cand.group_by("person_id", "band", "year").agg(pl.len().alias("k"))
+    n_controls = per_person["person_id"].n_unique()
+    w = strata.with_columns(
+        pl.col("n_case").cast(pl.Float64).alias("w"),
+        (pl.col("n_case") / pl.col("n_case").sum() * n_controls).alias("target"),
+    )
+    for _ in range(n_iter):
+        j = per_person.join(w.select("band", "year", "w"), on=["band", "year"], how="left").with_columns(
+            (pl.col("k") * pl.col("w").fill_null(0.0)).alias("kw")
+        )
+        j = j.with_columns((pl.col("kw") / pl.col("kw").sum().over("person_id")).alias("p"))
+        expected = j.group_by("band", "year").agg(pl.col("p").sum().alias("expected"))
+        w = (
+            w.join(expected, on=["band", "year"], how="left")
+            .with_columns(
+                pl.when(pl.col("expected") > 1e-9)
+                .then(pl.col("w") * pl.col("target") / pl.col("expected"))
+                .otherwise(pl.col("w"))
+                .alias("w")
+            )
+            .drop("expected")
+        )
+    return w.select("band", "year", "w")
+
+
 def pick_matched_index(case_index: pl.DataFrame, control_visits: pl.DataFrame, seed: int) -> tuple[pl.DataFrame, int]:
     """Pseudo-index per control, see the module docstring.
 
@@ -334,11 +368,8 @@ def pick_matched_index(case_index: pl.DataFrame, control_visits: pl.DataFrame, s
     )
     if cand.is_empty():
         return pl.DataFrame(schema={"person_id": pl.Int64, "index_date": pl.Date}), 0
-    cand = cand.join(strata, on=["band", "year"], how="left").with_columns(pl.col("n_case").fill_null(0))
-    n_cand = cand.group_by("band", "year").agg(pl.len().alias("n_cand"))
-    cand = cand.join(n_cand, on=["band", "year"], how="left").with_columns(
-        (pl.col("n_case") / pl.col("n_cand")).fill_null(0.0).alias("w")
-    )
+    weights = _fit_stratum_weights(cand, strata)
+    cand = cand.join(weights, on=["band", "year"], how="left").with_columns(pl.col("w").fill_null(0.0))
     has_weight = cand.group_by("person_id").agg((pl.col("w").sum() > 0).alias("has_w"))
     cand = cand.join(has_weight, on="person_id").with_columns(
         pl.when(pl.col("has_w")).then(pl.col("w")).otherwise(pl.lit(1.0)).alias("w")

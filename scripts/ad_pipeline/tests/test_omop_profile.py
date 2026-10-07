@@ -375,6 +375,26 @@ def test_matched_index_prefers_case_strata():
         assert dict(zip(picked["person_id"], picked["index_date"])) == {10: D(2020, 3, 1), 11: D(2020, 5, 1)}
 
 
+def test_matched_index_ignores_strata_without_cases():
+    # 60% of cases index in 2020 and 40% in 2010 (all aged 79 at index). Every control was born in
+    # 1941 and has a visit in 2020 (age 79), 2010 (age 69, no cases in that stratum) and 2000.
+    n_cases = 100
+    years = [2020] * 60 + [2010] * 40
+    cases = pl.DataFrame(
+        {
+            "person_id": list(range(n_cases)),
+            "index_date": [D(y, 6, 1) for y in years],
+            "birth_date": [D(y - 79, 1, 1) for y in years],
+        }
+    )
+    n_ctl = 400
+    rows = [(1000 + i, D(y, 6, 1), D(1941, 1, 1)) for i in range(n_ctl) for y in (2020, 2010, 2000)]
+    cv = pl.DataFrame(rows, schema=["person_id", "visit_start_date", "birth_date"], orient="row")
+    picked, _ = op.pick_matched_index(cases, cv, seed=11)
+    # controls born in 1941 only reach the age band of the 2020 cases, the 2010 cases are not reachable
+    assert set(picked["index_date"].dt.year().to_list()) == {2020}
+
+
 def test_matched_index_fallback_when_no_stratum_matches():
     cases = pl.DataFrame({"person_id": [1], "index_date": [D(2020, 7, 1)], "birth_date": [D(1940, 7, 1)]})
     cv = pl.DataFrame(
