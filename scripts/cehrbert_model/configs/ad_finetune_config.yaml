@@ -1,0 +1,79 @@
+# CEHR-BERT Fine-tuning Configuration for Alzheimer's Disease Prediction
+#
+# This config is used by: python -m cehrbert.runners.hf_cehrbert_finetune_runner
+
+# Model paths (use pretrained model)
+model_name_or_path: "data/pretrain_results"
+tokenizer_name_or_path: "data/pretrain_results"
+
+# Data paths
+# tokenized_full_dataset_path: every patient (test patients included) tokenized with the pretrained
+# tokenizer by step 07. Pretraining itself excludes the test patients, so its prepared dataset
+# under data/pretrain_prepared cannot be used here. Its validation split is the canonical val
+# split, which extract_cohort_sequences keeps as the fine-tuning validation set.
+# This enables the extract_cohort_sequences flow which properly applies observation_window
+tokenized_full_dataset_path: "data/full_tokenized"
+data_folder: "data/cehrbert_data/patient_sequence"  # Not used when tokenized_full_dataset_path is set
+# Fine-tuning uses ONLY the fine-tuning split of the cohort (train + val; step 02 writes this folder from cohort step 01 splits).
+cohort_folder: "data/cehrbert_data/cohort/finetune"
+dataset_prepared_path: "data/finetune_prepared"
+
+# Observation window: use 1 year of history before index_date
+# This is applied via extract_cohort_sequences when tokenized_full_dataset_path is set
+observation_window: 365
+
+# Always keep the four demographic prompt tokens (year, age, gender, race) of each sequence,
+# whatever the window, and keep them when the collator truncates to max_position_embeddings.
+keep_demographic_prompt: true
+
+# Not used to split the data while tokenized_full_dataset_path is set: train and validation are the
+# canonical splits of data/full_tokenized. Still validated to lie in (0, 1) and part of the
+# prepared-dataset hash, so change it only together with a rerun of fine-tuning and step 11.
+# The held-out TEST set is a separate cohort created in cohort step 01 and scored in step 10.
+validation_split_percentage: 0.1
+
+# Data processing
+preprocessing_num_workers: 4
+preprocessing_batch_size: 1000
+streaming: false
+
+# Tokenizer settings
+vocab_size: 50000
+min_frequency: 0
+
+# Model architecture settings
+att_function_type: "cehrbert"
+is_data_in_meds: false
+inpatient_att_function_type: "none"
+include_auxiliary_token: true
+
+# Training settings. Prediction is a SEPARATE step (step 10) on the held-out test cohort,
+# so fine-tuning only trains and evaluates here.
+do_train: true
+do_eval: true
+do_predict: false
+seed: 42
+
+# Model dimensions
+num_hidden_layers: 6
+max_position_embeddings: 512
+
+# Output and checkpointing
+output_dir: "data/finetune_results"
+evaluation_strategy: "epoch"
+save_strategy: "epoch"
+
+# Optimization
+learning_rate: 0.00002
+per_device_train_batch_size: 16
+per_device_eval_batch_size: 16
+num_train_epochs: 20
+warmup_steps: 500
+weight_decay: 0.01
+
+# Logging and model selection
+logging_steps: 50
+save_total_limit: 3
+load_best_model_at_end: true
+metric_for_best_model: "eval_loss"
+greater_is_better: false

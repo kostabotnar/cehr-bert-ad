@@ -44,7 +44,8 @@ dist/
 Thumbs.db
 
 # --- Generated pipeline step reports (build/ already ignored above) ---
-scripts/ad_pipeline/reports/
+scripts/*/reports/
+scripts/reports/
 
 # --- Work plans (local only) ---
 planning/
