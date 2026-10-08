@@ -15,12 +15,12 @@ for every patient whatever the window and survive truncation. When the first vis
 index date only the gender and race tokens are kept (2 tokens). "Empty window" still means no
 in-window event tokens, not counting those four.
 
-Outputs (under build/<run_label>/linear_probe/features/<split>/)
+Outputs (under build/cehrbert_model/<run_label>/linear_probe/features/<split>/)
   features_cls.npy, features_mean.npy    float32, N x hidden size
   meta.parquet                           person_id, index_date, label,
                                          n_tokens_before_truncation, truncated,
                                          n_event_tokens, demographic_prompt_tokens
-  build/<run_label>/reports/13_linear_probe_features/{status.json,report.md}
+  build/cehrbert_model/<run_label>/reports/13_linear_probe_features/{status.json,report.md}
 
 Usage
   python cehrbert_model/13_linear_probe_features.py
@@ -84,9 +84,9 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     label = paths.run_label(args.window_days, args.ctx)
-    output_dir = Path(args.output_dir) if args.output_dir else paths.linear_probe_features_dir(label)
+    output_dir = Path(args.output_dir) if args.output_dir else paths.cehrbert_linear_probe_features_dir(label)
     report_dir = (
-        Path(args.report_dir) if args.report_dir else paths.build_report_dir_for("13_linear_probe_features", label)
+        Path(args.report_dir) if args.report_dir else paths.cehrbert_report_dir("13_linear_probe_features", label)
     )
 
     report = StepReport("13_linear_probe_features", title="Step 13 - Frozen CEHR-BERT features")

@@ -82,3 +82,35 @@ def test_predict_no_results_fails(step, tmp_path):
     rep = tmp_path / "rep09b"
     rc = mod.main(["--results-dir", str(tmp_path / "nope"), "--skip-launch", "--report-dir", str(rep)])
     assert rc == 1
+
+
+def test_validation_step_registers_the_finetuned_model_in_the_manifest(step, tmp_path):
+    from pipeline import manifest as mf
+    from pipeline.reporting import StepReport
+
+    mod = step("cehrbert_model/11_validation_predictions.py")
+    results = tmp_path / "finetune_results"
+    for sub in ("test_predictions", "validation_predictions"):
+        (results / sub).mkdir(parents=True)
+        (results / sub / "0.parquet").write_bytes(b"")
+    manifest_path = tmp_path / "manifest.json"
+    mf.upsert_models(manifest_path, [mf.make_entry("linear_probe_cls", "Probe", "linear_probe", "a", "b")])
+
+    report = StepReport("11")
+    mod._update_manifest(report, manifest_path, results)
+    models = {m.name: m for m in mf.read_manifest(manifest_path)}
+    assert list(models) == ["linear_probe_cls", "cehrbert_finetuned"]
+    assert models["cehrbert_finetuned"].test_predictions == results / "test_predictions"
+    assert models["cehrbert_finetuned"].validation_predictions == results / "validation_predictions"
+    assert report.passed
+
+
+def test_validation_step_without_test_predictions_adds_nothing_and_warns(step, tmp_path):
+    from pipeline.reporting import StepReport
+
+    mod = step("cehrbert_model/11_validation_predictions.py")
+    (tmp_path / "validation_predictions").mkdir()
+    report = StepReport("11")
+    mod._update_manifest(report, tmp_path / "manifest.json", tmp_path)
+    assert not (tmp_path / "manifest.json").exists()
+    assert [c.level for c in report.checks if not c.ok] == ["warning"]

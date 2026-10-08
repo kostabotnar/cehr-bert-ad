@@ -22,6 +22,7 @@
 #   --ctx <int>                 token context, sets CTX_ARG
 #   --observation-window <int>  look-back in days, sets OBS_ARG (--observation-window) and WIN_ARG (--window-days)
 #   --window-days <int>         look-back in days, sets WIN_ARG only
+#   --name <text>               comparison name, sets NAME_ARG
 
 PY="${PYTHON:-python}"
 INVOCATION_DIR="$(pwd)"   # captured before run_steps changes into the part folder
@@ -31,6 +32,7 @@ LINK_ARG=""
 CTX_ARG=""
 OBS_ARG=""
 WIN_ARG=""
+NAME_ARG=""
 
 _option_allowed() {
     [[ " ${_ALLOWED_OPTIONS} " == *" $1 "* ]]
@@ -69,6 +71,10 @@ parse_args() {
                 _option_allowed window-days || { echo "Unknown argument: $1"; exit 2; }
                 _need_value "$1" $#
                 WIN_ARG="--window-days $2"; shift 2 ;;
+            --name)
+                _option_allowed name || { echo "Unknown argument: $1"; exit 2; }
+                _need_value "$1" $#
+                NAME_ARG="--name $2"; shift 2 ;;
             *) echo "Unknown argument: $1"; exit 2 ;;
         esac
     done

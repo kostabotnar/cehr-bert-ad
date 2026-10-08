@@ -7,7 +7,8 @@ resolved from the NLM RxNorm API (RXCUI -> ingredient name); ICD/CPT/HCPCS/LOINC
 are from standard code references. These external lookups are captured in DESCRIPTIONS below so
 the tables are reproducible without re-querying.
 
-Outputs, under ``build/<label>/feature_tables/``:
+Outputs, under ``build/feature_importance/<label>/feature_tables/``. The rankings are read from the same folder
+(``lr/``, ``xgboost/``, ``attention/``):
   lr_top10.csv, xgboost_top10.csv, attention_top10.csv
   top_features.md   (all three tables, manuscript-ready)
 
@@ -27,6 +28,7 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from pipeline import paths  # noqa: E402
+from pipeline.reporting import markdown_table  # noqa: E402
 
 # Curated descriptions keyed by resolved source code / token / feature name.
 # Drugs: RxNorm RXCUI -> ingredient (verified via https://rxnav.nlm.nih.gov RxNorm API).
@@ -129,15 +131,15 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     label = paths.run_label(args.window_days, args.ctx)
-    run = paths.run_dir(label)
+    run = paths.feature_importance_dir(label)
     out_dir = run / "feature_tables"
     out_dir.mkdir(parents=True, exist_ok=True)
 
     concept_table = Path(args.concept_table) if args.concept_table else (paths.OMOP_DIR / "concept" / "concept.parquet")
     codes = _concept_lookup(concept_table)
 
-    lr = _baseline_table(run / "baselines" / "lr" / "feature_importance.csv", "coefficient", codes, args.top)
-    xgb = _baseline_table(run / "baselines" / "xgboost" / "feature_importance.csv", "importance", codes, args.top)
+    lr = _baseline_table(run / "lr" / "feature_importance.csv", "coefficient", codes, args.top)
+    xgb = _baseline_table(run / "xgboost" / "feature_importance.csv", "importance", codes, args.top)
     att = _attention_table(run / "attention" / "concept_attribution_pred_pos.csv", codes, args.top)
 
     lr.to_csv(out_dir / "lr_top10.csv", index=False)
@@ -153,15 +155,15 @@ def main(argv: list[str] | None = None) -> int:
         "",
         "## Logistic Regression (signed coefficient; + pushes toward AD)",
         "",
-        lr.to_markdown(index=False),
+        markdown_table(lr),
         "",
         "## XGBoost (feature importance; unsigned)",
         "",
-        xgb.to_markdown(index=False),
+        markdown_table(xgb),
         "",
         "## Attention (gradient x attention, predicted-positive patients)",
         "",
-        att.to_markdown(index=False),
+        markdown_table(att),
         "",
     ]
     md_path = out_dir / "top_features.md"

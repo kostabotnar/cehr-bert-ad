@@ -7,8 +7,8 @@ Reported overall and split by label (cases vs controls). Reads only the OMOP tab
 
 Outputs
 -------
-  build/data_qc/history_length_stats.json
-  build/data_qc/figures/history_length_hist.png
+  build/data_qc/history_length/history_length_stats.json
+  build/data_qc/history_length/figures/history_length_hist.png
   scripts/data_qc/reports/02_history_length_stats/{status.json,report.md}
 
 Usage
@@ -127,7 +127,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Patient history length statistics")
     parser.add_argument("--data-dir", default=str(paths.OMOP_DIR))
     parser.add_argument("--splits-file", default=str(paths.COHORT_SPLITS_FILE))
-    parser.add_argument("--results-dir", default=str(paths.DATA_QC_BUILD_DIR))
+    parser.add_argument("--results-dir", default=str(paths.HISTORY_LENGTH_DIR))
     parser.add_argument("--figures-dir", default=None)
     parser.add_argument("--report-dir", default=str(paths.report_dir_for(PART, STEP)))
     args = parser.parse_args(argv)

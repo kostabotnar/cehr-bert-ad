@@ -7,19 +7,22 @@ protocol as the classical logistic regression in classical_ml step 02), refit on
 val and test. The kind with the higher VALIDATION AUROC is the primary result; the other is
 kept as a secondary result. Test is never used for any choice.
 
-Predictions use CEHR-BERT's prediction-parquet schema, so each kind's folders are inputs to
-``evaluation/01_evaluate.py``, which this step runs per kind (skip with ``--skip-evaluate``).
+Predictions use CEHR-BERT's prediction-parquet schema. The step only describes them in the part's
+``predictions_manifest.json`` (models ``linear_probe_cls`` and ``linear_probe_mean``, the lower validation AUROC
+marked secondary); scoring is done by the evaluation part.
 
-Outputs (under build/<run_label>/linear_probe/)
+Outputs (under build/cehrbert_model/<run_label>/)
+  predictions_manifest.json              entries upserted for both kinds
+  linear_probe/ (all of the following)
   <kind>/test_predictions/predictions.parquet
   <kind>/validation_predictions/predictions.parquet
   <kind>/model.joblib, <kind>/best_params.json
   summary.json                           which kind is primary, with validation AUROCs
-  build/<run_label>/reports/14_train_linear_probe/{status.json,report.md}
+  reports/14_train_linear_probe/{status.json,report.md}
 
 Usage
   python cehrbert_model/14_train_linear_probe.py
-  python cehrbert_model/14_train_linear_probe.py --cv-folds 2 --n-jobs 1 --skip-evaluate
+  python cehrbert_model/14_train_linear_probe.py --cv-folds 2 --n-jobs 1
 """
 
 from __future__ import annotations
@@ -34,6 +37,7 @@ from sklearn.metrics import average_precision_score, roc_auc_score
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from pipeline import linear_probe as lp  # noqa: E402
+from pipeline import manifest as mf  # noqa: E402
 from pipeline import paths  # noqa: E402
 from pipeline.baseline_predictions import write_predictions  # noqa: E402
 from pipeline.reporting import StepReport  # noqa: E402
@@ -55,20 +59,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--cv-folds", type=int, default=5)
     parser.add_argument("--n-jobs", type=int, default=-1, help="Parallel jobs for the grid search")
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument(
-        "--skip-evaluate", action="store_true", help="Do not run evaluation/01_evaluate.py per feature kind"
-    )
-    parser.add_argument("--n-bootstrap", type=int, default=lp.EVAL_N_BOOTSTRAP)
-    parser.add_argument("--cal-bins", type=int, default=lp.EVAL_CAL_BINS)
+    parser.add_argument("--manifest", default=None, help="Predictions manifest to update (default: per-run manifest)")
     parser.add_argument("--report-dir", default=None, help="Report dir (default: per-run report dir)")
     args = parser.parse_args(argv)
 
     label = paths.run_label(args.window_days, args.ctx)
-    features_dir = Path(args.features_dir) if args.features_dir else paths.linear_probe_features_dir(label)
-    output_dir = Path(args.output_dir) if args.output_dir else paths.linear_probe_dir(label)
-    report_dir = (
-        Path(args.report_dir) if args.report_dir else paths.build_report_dir_for("14_train_linear_probe", label)
-    )
+    features_dir = Path(args.features_dir) if args.features_dir else paths.cehrbert_linear_probe_features_dir(label)
+    output_dir = Path(args.output_dir) if args.output_dir else paths.cehrbert_linear_probe_dir(label)
+    report_dir = Path(args.report_dir) if args.report_dir else paths.cehrbert_report_dir("14_train_linear_probe", label)
 
     report = StepReport("14_train_linear_probe", title="Step 14 - Linear probe on frozen CEHR-BERT")
     for name, value in (
@@ -149,16 +147,20 @@ def main(argv: list[str] | None = None) -> int:
     report.add_metric("primary_kind", primary)
     report.add_artifact(lp.write_json(output_dir / "summary.json", summary))
 
-    if not args.skip_evaluate:
-        for kind in lp.FEATURE_KINDS:
-            rc = lp.run_evaluate(
-                output_dir / kind,
-                paths.build_report_dir_for(f"01_evaluate_linear_probe_{kind}", label),
-                n_bootstrap=args.n_bootstrap,
-                seed=lp.EVAL_SEED,
-                cal_bins=args.cal_bins,
-            )
-            report.add_check(f"{kind}: evaluation/01_evaluate.py succeeded", rc == 0, detail=f"exit code {rc}")
+    manifest_path = Path(args.manifest) if args.manifest else paths.cehrbert_manifest_path(label)
+    secondary = summary["secondary_kind"]
+    entries = [
+        mf.make_entry(
+            f"linear_probe_{kind}",
+            f"Linear probe ({kind}, {'secondary' if kind == secondary else 'primary'})",
+            "linear_probe",
+            output_dir / kind / "test_predictions",
+            output_dir / kind / "validation_predictions",
+            secondary=kind == secondary,
+        )
+        for kind in lp.FEATURE_KINDS
+    ]
+    report.add_artifact(mf.upsert_models(manifest_path, entries))
 
     return _finalize(report, report_dir)
 

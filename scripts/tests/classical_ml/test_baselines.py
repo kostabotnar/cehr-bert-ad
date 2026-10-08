@@ -324,6 +324,7 @@ def baseline_run(tmp_path_factory):
         [
             "--features-dir", str(features),
             "--output-dir", str(baselines),
+            "--manifest", str(root / "predictions_manifest.json"),
             "--report-dir", str(root / "reports" / "12"),
             "--cv-folds", "2",
             "--xgb-iter", "2",
@@ -359,41 +360,51 @@ def test_step12_writes_model_outputs(baseline_run):
             assert len(y_true) == n_rows
 
 
-def test_step13_writes_comparison(baseline_run, step):
+def test_step12_writes_manifest(baseline_run):
+    from pipeline import manifest as mf
+
+    models = mf.read_manifest(baseline_run["root"] / "predictions_manifest.json")
+    assert [m.name for m in models] == ["lr", "xgboost"]
+    assert [m.display_label for m in models] == ["L2 Logistic Regression", "XGBoost"]
+    assert {m.family for m in models} == {"classical_ml"} and not any(m.secondary for m in models)
+    for m in models:
+        assert m.test_predictions == baseline_run["baselines"] / m.name / "test_predictions"
+        assert m.validation_predictions == baseline_run["baselines"] / m.name / "validation_predictions"
+
+
+def test_evaluation_steps_score_and_compare_the_manifest(baseline_run, step, tmp_path, monkeypatch):
+    monkeypatch.setattr(paths, "EVALUATION_BUILD_DIR", tmp_path / "evaluation")
     root = baseline_run["root"]
-    figures = root / "figures"
+    manifest_path = str(root / "predictions_manifest.json")
+    rc = step("evaluation/01_evaluate.py").main(
+        [
+            "--manifest",
+            manifest_path,
+            "--name",
+            "cmp",
+            "--n-bootstrap",
+            "20",
+            "--report-dir",
+            str(root / "reports" / "e1"),
+        ]
+    )
+    assert rc == 0
+    models_dir = tmp_path / "evaluation" / "cmp" / "models"
+    assert (models_dir / "lr" / "metrics.json").is_file()
+    assert (models_dir / "xgboost" / "figures" / "roc_curve.png").is_file()
+
     rc = step("evaluation/02_compare_models.py").main(
         [
-            "--splits-file", str(root / "splits.parquet"),
-            "--baselines-dir", str(baseline_run["baselines"]),
-            "--linear-probe-dir", str(root / "missing_linear_probe"),
-            "--output-dir", str(root / "comparison"),
-            "--cehrbert-metrics", str(root / "missing_metrics.json"),
-            "--cehrbert-predictions", str(root / "missing_predictions"),
-            "--figures-dir", str(figures),
-            "--report-dir", str(root / "reports" / "13"),
-            "--n-bootstrap", "20",
+            "--manifest",
+            manifest_path,
+            "--name",
+            "cmp",
+            "--splits-file",
+            str(root / "splits.parquet"),
+            "--n-bootstrap",
+            "20",
         ]
-    )  # fmt: skip
+    )
     assert rc == 0
-    baselines = baseline_run["baselines"]
-    for path in (
-        root / "comparison" / "comparison.json",
-        root / "comparison" / "comparison.md",
-        baselines / "lr" / "metrics.json",
-        baselines / "xgboost" / "metrics.json",
-        figures / "compare_roc.png",
-        figures / "compare_pr.png",
-    ):
-        assert path.is_file(), path
-
-
-def test_step13_evaluate_command_uses_contract_arguments(step, tmp_path):
-    mod = step("evaluation/02_compare_models.py")
-    cmd = mod.evaluate_command(tmp_path / "lr")
-    args = dict(zip(cmd[2::2], cmd[3::2]))
-    assert args["--n-bootstrap"] == "2000"
-    assert args["--seed"] == "42"
-    assert args["--cal-bins"] == "10"
-    assert args["--predictions"] == str(tmp_path / "lr" / "test_predictions")
-    assert args["--val-predictions"] == str(tmp_path / "lr" / "validation_predictions")
+    for rel in ("comparison.json", "comparison.md", "figures/compare_roc.png", "figures/compare_pr.png"):
+        assert (tmp_path / "evaluation" / "cmp" / rel).is_file(), rel

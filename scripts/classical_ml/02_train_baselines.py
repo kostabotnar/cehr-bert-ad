@@ -3,10 +3,10 @@
 
 These two models predict the *same* AD task as CEHR-BERT and are scored by the *same*
 evaluation code (``pipeline.evaluation`` / ``evaluation/01_evaluate.py``). This step consumes the
-tabular feature matrices written by step 01 (``build/baselines/features/``), tunes each
+tabular feature matrices written by step 01 (``build/classical_ml/<window_label>/features/``), tunes each
 model by cross-validated AUROC on the training split, refits on train, and writes
-predictions in CEHR-BERT's prediction-parquet schema so the baseline folders are drop-in
-inputs to ``evaluation/01_evaluate.py``.
+predictions in CEHR-BERT's prediction-parquet schema and lists them in the part's
+``predictions_manifest.json``, which is what the evaluation part reads.
 
 Models
 ------
@@ -16,18 +16,18 @@ Models
     tuned with RandomizedSearchCV, then a final refit on train with early stopping on the
     validation split.
 
-The sanity AUROC/AUPRC numbers printed here are *not* authoritative -- the headline metrics
-(with bootstrap CIs, calibration, operating points) come from ``evaluation/01_evaluate.py`` run against
-the prediction folders this step writes.
+The sanity AUROC/AUPRC numbers printed here are *not* authoritative: the headline metrics
+(with bootstrap CIs, calibration, operating points) come from evaluation step 01.
 
-Outputs (under build/baselines/)
+Outputs (under build/classical_ml/<window_label>/)
+  predictions_manifest.json   models lr and xgboost
   lr/test_predictions/predictions.parquet
   lr/validation_predictions/predictions.parquet
   lr/model.joblib, lr/best_params.json
   xgboost/test_predictions/predictions.parquet
   xgboost/validation_predictions/predictions.parquet
   xgboost/model.joblib, xgboost/best_params.json
-  build/reports/02_train_baselines/{status.json,report.md}
+  reports/02_train_baselines/{status.json,report.md}
 
 Usage
   python classical_ml/02_train_baselines.py
@@ -53,9 +53,13 @@ from xgboost import XGBClassifier
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from pipeline import baselines as bl  # noqa: E402
+from pipeline import manifest as mf  # noqa: E402
 from pipeline import paths  # noqa: E402
 from pipeline.baseline_predictions import write_predictions  # noqa: E402
 from pipeline.reporting import StepReport  # noqa: E402
+
+# Manifest model name -> label shown in the comparison table.
+MODEL_LABELS = {"lr": "L2 Logistic Regression", "xgboost": "XGBoost"}
 
 
 def _build_lr_search(cv: StratifiedKFold) -> GridSearchCV:
@@ -145,12 +149,12 @@ def main(argv: list[str] | None = None) -> int:
         "--features-dir",
         default=None,
         help="Folder of {train,val,test}_X.npz / *_meta.npz from step 01 "
-        "(default: per-run features_dir for the run label)",
+        "(default: build/classical_ml/<window_label>/features)",
     )
     parser.add_argument(
         "--output-dir",
         default=None,
-        help="Parent folder for lr/ and xgboost/ outputs " "(default: per-run baselines_dir for the run label)",
+        help="Parent folder for lr/ and xgboost/ outputs (default: build/classical_ml/<window_label>)",
     )
     parser.add_argument(
         "--window-days",
@@ -158,20 +162,24 @@ def main(argv: list[str] | None = None) -> int:
         default=paths.DEFAULT_WINDOW_DAYS,
         help="Look-back window in days; negative => unbounded (all history)",
     )
-    parser.add_argument("--ctx", type=int, default=paths.DEFAULT_CTX, help="CEHR-BERT token cap; part of the run label")
+    parser.add_argument("--manifest", default=None, help="Predictions manifest to write (default: per-run manifest)")
     parser.add_argument("--cv-folds", type=int, default=5)
     parser.add_argument("--xgb-iter", type=int, default=30, help="Number of RandomizedSearchCV samples for XGBoost")
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--report-dir", default=None, help="Report dir (default: per-run report dir for the run label)")
+    parser.add_argument(
+        "--report-dir",
+        default=None,
+        help="Report dir (default: build/classical_ml/<window_label>/reports/02_train_baselines)",
+    )
     args = parser.parse_args(argv)
 
-    label = paths.run_label(args.window_days, args.ctx)
-    features_dir = Path(args.features_dir) if args.features_dir else paths.features_dir(label)
-    output_dir = Path(args.output_dir) if args.output_dir else paths.baselines_dir(label)
-    report_dir = Path(args.report_dir) if args.report_dir else paths.build_report_dir_for("02_train_baselines", label)
+    label = paths.window_label(args.window_days)
+    features_dir = Path(args.features_dir) if args.features_dir else paths.classical_features_dir(label)
+    output_dir = Path(args.output_dir) if args.output_dir else paths.classical_ml_dir(label)
+    report_dir = Path(args.report_dir) if args.report_dir else paths.classical_report_dir("02_train_baselines", label)
 
     report = StepReport("02_train_baselines", title="Step 02 - Train classical-ML baselines")
-    report.add_metric("run_label", label)
+    report.add_metric("window_label", label)
     report.add_metric("features_dir", str(features_dir))
     report.add_metric("output_dir", str(output_dir))
     report.add_metric("cv_folds", args.cv_folds)
@@ -300,6 +308,19 @@ def main(argv: list[str] | None = None) -> int:
         xgb_prob_val,
     )
 
+    manifest_path = Path(args.manifest) if args.manifest else paths.classical_manifest_path(label)
+    entries = [
+        mf.make_entry(
+            key,
+            MODEL_LABELS[key],
+            "classical_ml",
+            output_dir / key / "test_predictions",
+            output_dir / key / "validation_predictions",
+        )
+        for key in MODEL_LABELS
+    ]
+    report.add_artifact(mf.upsert_models(manifest_path, entries))
+
     return _finalize(report, report_dir)
 
 
@@ -308,7 +329,7 @@ def _finalize(report: StepReport, report_dir: str) -> int:
     report.print_summary()
     print(f"\nReport written to {report_dir}")
     if report.passed:
-        print("Next: python evaluation/02_compare_models.py")
+        print("Next: python evaluation/01_evaluate.py")
     return report.exit_code()
 
 

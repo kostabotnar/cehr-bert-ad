@@ -174,6 +174,19 @@ class StepReport:
         _safe_print("\n".join(lines))
 
 
+def markdown_table(df) -> str:
+    """Render a DataFrame as a pipe table (header, separator, rows); cells are str() with ``|`` escaped."""
+
+    def cell(value) -> str:
+        return str(value).replace("|", "\\|").replace("\n", " ")
+
+    columns = list(df.columns)
+    lines = ["| " + " | ".join(cell(c) for c in columns) + " |", "|" + "|".join(["---"] * len(columns)) + "|"]
+    for row in df.itertuples(index=False):
+        lines.append("| " + " | ".join(cell(v) for v in row) + " |")
+    return "\n".join(lines)
+
+
 def _safe_print(text: str) -> None:
     """Print text, degrading non-encodable characters instead of raising on cp1252 consoles."""
     import sys

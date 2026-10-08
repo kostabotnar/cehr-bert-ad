@@ -14,13 +14,14 @@ with CEHR-BERT uses the same patients. Nothing here needs CEHR-BERT output.
 
 ```bash
 bash classical_ml/run.sh
-bash classical_ml/run.sh --ctx 4096 --window-days -1
+bash classical_ml/run.sh --window-days -1
 python classical_ml/01_prepare_features.py --window-days 365 --min-prevalence 0.01
 python classical_ml/02_train_baselines.py --cv-folds 5 --xgb-iter 30 --seed 42
 ```
 
-Options of `run.sh`: `--ctx` and `--window-days` select the run label (`w_<window>_ctx<ctx>`, default
-`w_365_ctx512`) and go to both steps; `--from <step id>`.
+Options of `run.sh`: `--window-days` selects the window label (`w_<window>`, default `w_365`; `w_all` for
+all history) and goes to both steps; `--from <step id>`. The token context does not affect these
+models, so it is not part of the label.
 
 ## Features (step 01)
 
@@ -39,14 +40,16 @@ test. The step fails when `data/cohort/splits.parquet` is missing.
 The AUROC and AUPRC printed here are sanity numbers; the evaluation part computes the headline
 metrics.
 
-## Outputs (under `build/<run_label>/baselines/`)
+## Outputs (under `build/classical_ml/<window_label>/`)
 
 ```
 features/{train,val,test}_X.npz, {train,val,test}_meta.npz, feature_spec.json, feature_names.json
+predictions_manifest.json     models lr and xgboost, read by evaluation
 lr/{test,validation}_predictions/predictions.parquet, lr/model.joblib, lr/best_params.json
 xgboost/{test,validation}_predictions/predictions.parquet, xgboost/model.joblib, xgboost/best_params.json
 ```
 
-Prediction parquets use the CEHR-BERT schema, so they are inputs to `evaluation/01_evaluate.py`.
-Reports go to `build/<run_label>/reports/<step>/`; `scripts/classical_ml/reports/` holds the
+Prediction parquets use the CEHR-BERT schema and are listed in the manifest (display labels
+"L2 Logistic Regression" and "XGBoost"); the evaluation part scores them.
+Reports go to `build/classical_ml/<window_label>/reports/<step>/`; `scripts/classical_ml/reports/` holds the
 environment check and the runner summary.

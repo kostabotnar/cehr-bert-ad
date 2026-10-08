@@ -18,13 +18,12 @@ from pipeline import evaluation as ev
 
 @dataclasses.dataclass
 class ModelSpec:
-    """One model to compare: its label and where its predictions and metrics live."""
+    """One model to compare: its label and where its predictions and step 01 metrics live."""
 
     label: str
     test_dir: Path
     val_dir: Path
     metrics_path: Path
-    evaluate_dir: Path | None = None  # folder holding test_/validation_predictions; None = do not re-evaluate
     secondary: bool = False
 
 

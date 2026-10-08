@@ -14,12 +14,12 @@ partition CEHR-BERT used so the downstream comparison is apples-to-apples:
   * vocabulary fit on TRAIN only: concepts present in >= ``--min-prevalence`` of training
     patients are kept, then applied unchanged to val/test (no leakage)
 
-Outputs (under build/baselines/features/)
+Outputs (under build/classical_ml/<window_label>/features/, window_label = w_<days> or w_all)
   {train,val,test}_X.npz        scipy CSR design matrix
   {train,val,test}_meta.npz     y / person_ids / index_dates aligned to the matrix rows
   feature_spec.json             kept vocabulary + demographic categories + age median
   feature_names.json            column-aligned feature names
-  build/reports/01_prepare_features/{status.json,report.md}
+  build/classical_ml/<window_label>/reports/01_prepare_features/{status.json,report.md}
 
 Usage
   python classical_ml/01_prepare_features.py
@@ -50,7 +50,7 @@ def main(argv: list[str] | None = None) -> int:
         help="Canonical train/val/test split file from cohort step 01",
     )
     parser.add_argument(
-        "--output-dir", default=None, help="Features output dir (default: per-run features_dir for the run label)"
+        "--output-dir", default=None, help="Features output dir (default: build/classical_ml/<window_label>/features)"
     )
     parser.add_argument(
         "--window-days",
@@ -58,21 +58,23 @@ def main(argv: list[str] | None = None) -> int:
         default=paths.DEFAULT_WINDOW_DAYS,
         help="Look-back window in days; negative => unbounded (all history)",
     )
-    parser.add_argument("--ctx", type=int, default=paths.DEFAULT_CTX, help="CEHR-BERT token cap; part of the run label")
     parser.add_argument("--min-prevalence", type=float, default=bl.DEFAULT_MIN_PREVALENCE)
-    parser.add_argument("--report-dir", default=None, help="Report dir (default: per-run report dir for the run label)")
+    parser.add_argument(
+        "--report-dir",
+        default=None,
+        help="Report dir (default: build/classical_ml/<window_label>/reports/01_prepare_features)",
+    )
     args = parser.parse_args(argv)
 
-    label = paths.run_label(args.window_days, args.ctx)
-    out_dir = Path(args.output_dir) if args.output_dir else paths.features_dir(label)
-    report_dir = Path(args.report_dir) if args.report_dir else paths.build_report_dir_for("01_prepare_features", label)
+    label = paths.window_label(args.window_days)
+    out_dir = Path(args.output_dir) if args.output_dir else paths.classical_features_dir(label)
+    report_dir = Path(args.report_dir) if args.report_dir else paths.classical_report_dir("01_prepare_features", label)
 
     report = StepReport("01_prepare_features", title="Step 01 - Prepare baseline feature matrices")
     data_dir = Path(args.data_dir).resolve()
-    report.add_metric("run_label", label)
+    report.add_metric("window_label", label)
     report.add_metric("data_dir", str(data_dir))
     report.add_metric("window_days", args.window_days)
-    report.add_metric("ctx", args.ctx)
     report.add_metric("min_prevalence", args.min_prevalence)
 
     # --- recover the shared train/val/test partition -----------------------

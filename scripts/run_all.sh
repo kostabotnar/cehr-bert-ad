@@ -13,9 +13,10 @@
 # Options:
 #   --parts a,b,...             parts to run (default: all)
 #   --link <path>               OMOP data folder; passed to data_verification
-#   --ctx <int>                 token context; passed to cehrbert_model, classical_ml, evaluation, feature_importance
+#   --ctx <int>                 token context; passed to cehrbert_model, evaluation, feature_importance
 #   --observation-window <int>  look-back in days (negative = all history); passed as --observation-window to
 #                               cehrbert_model and as --window-days to classical_ml, evaluation, feature_importance
+#   --name <text>               comparison name (build/evaluation/<name>/); passed to evaluation
 #
 # Each part has its own run.sh (see scripts/<part>/README.md), so a part can also be run on its own.
 # Writes scripts/reports/summary.md.
@@ -32,6 +33,7 @@ PARTS_ARG=""
 LINK_PATH=""
 CTX=""
 OBS=""
+NAME=""
 
 need_value() {
     if [[ $2 -lt 2 ]]; then
@@ -50,6 +52,7 @@ while [[ $# -gt 0 ]]; do
             shift 2 ;;
         --ctx) need_value "$1" $#; CTX="$2"; shift 2 ;;
         --observation-window) need_value "$1" $#; OBS="$2"; shift 2 ;;
+        --name) need_value "$1" $#; NAME="$2"; shift 2 ;;
         *) echo "Unknown argument: $1"; exit 2 ;;
     esac
 done
@@ -82,7 +85,12 @@ part_args() {
         cehrbert_model)
             [[ -n "${CTX}" ]] && echo -n "--ctx ${CTX} "
             [[ -n "${OBS}" ]] && echo -n "--observation-window ${OBS}" ;;
-        classical_ml | evaluation | feature_importance)
+        classical_ml) [[ -n "${OBS}" ]] && echo -n "--window-days ${OBS}" ;;
+        evaluation)
+            [[ -n "${CTX}" ]] && echo -n "--ctx ${CTX} "
+            [[ -n "${OBS}" ]] && echo -n "--window-days ${OBS} "
+            [[ -n "${NAME}" ]] && echo -n "--name ${NAME}" ;;
+        feature_importance)
             [[ -n "${CTX}" ]] && echo -n "--ctx ${CTX} "
             [[ -n "${OBS}" ]] && echo -n "--window-days ${OBS}" ;;
     esac
