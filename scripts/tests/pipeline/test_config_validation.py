@@ -25,8 +25,8 @@ def test_valid_pretrain_config_passes(pretrain_config):
 def test_bad_pretrain_values_fail(tmp_path, patient_sequence_dir):
     cfg = {
         "data_folder": str(patient_sequence_dir),
-        "num_train_epochs": 0,       # invalid
-        "learning_rate": 5.0,        # invalid (>=1)
+        "num_train_epochs": 0,  # invalid
+        "learning_rate": 5.0,  # invalid (>=1)
         "vocab_size": 50000,
         "do_train": True,
     }
@@ -75,19 +75,13 @@ def test_finetune_bad_validation_pct_fails(tmp_path, model_dir, fake_tokenized_d
     assert "validation_split_percentage in (0, 1)" in _names_failed(r)
 
 
-def test_finetune_do_predict_true_warns(tmp_path, model_dir, fake_tokenized_dataset, cohort_dir):
-    # Fine-tuning should not predict (that's step 9) -> warning, not a hard failure.
-    cfg = {
-        "model_name_or_path": str(model_dir),
-        "tokenizer_name_or_path": str(model_dir),
-        "tokenized_full_dataset_path": str(fake_tokenized_dataset),
-        "cohort_folder": str(cohort_dir),
-        "observation_window": 365,
-        "do_train": True,
-        "do_predict": True,
-        "validation_split_percentage": 0.1,
-    }
-    path = tmp_path / "ft.yaml"
+def test_finetune_do_predict_true_warns(tmp_path, finetune_config):
+    # Fine-tuning should not predict (that's cehrbert_model step 10) -> warning, not a hard failure.
+    # Starts from the full fixture config: the runner-dataclass parse check needs data_folder,
+    # dataset_prepared_path and output_dir, so a partial config fails that check for another reason.
+    cfg = yaml.safe_load(finetune_config.read_text(encoding="utf-8"))
+    cfg["do_predict"] = True
+    path = tmp_path / "ft_predict.yaml"
     path.write_text(yaml.safe_dump(cfg), encoding="utf-8")
     r = StepReport("t")
     cv.add_finetune_config_checks(r, path, resolve_under_root)
