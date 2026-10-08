@@ -1,8 +1,10 @@
 #!/usr/bin/env python
 """Step 11: Per-sample predictions on the fine-tuning VALIDATION split.
 
-This step scores the *validation* split that the fine-tuning runner created internally
-(train/validation split of ``data/cehrbert_data/cohort/finetune``), using the model fine-tuned in step 09.
+This step scores the *validation* split of the dataset the fine-tuning runner prepared in step 09
+(``data/finetune_prepared/<hash>``). With ``tokenized_full_dataset_path`` set, that split is the canonical
+``val`` split of ``data/cehrbert_data/cohort/finetune``, carried over from ``data/full_tokenized`` (step 07);
+it is not drawn with ``validation_split_percentage``. The model is the one fine-tuned in step 09.
 Downstream evaluation (evaluation step 01) uses these per-sample validation probabilities to select
 an UNBIASED operating threshold -- one chosen on data the model was tuned/early-stopped on
 but never scored at the patient level, and crucially NOT on the held-out test set. Picking a
@@ -11,13 +13,15 @@ optimistically biased; this step exists to avoid exactly that leakage.
 
 Why we KEEP ``cohort_folder`` and ``dataset_prepared_path`` from the fine-tuning config
 (rather than pointing at the test cohort like step 10 does):
-    ``generate_prepared_ds_path`` hashes (data_folder/cohort_folder + tokenizer path +
-    validation_split_percentage + test_eval_ratio + split_by_patient + chronological_split)
-    to derive ``dataset_prepared_path/<hash>``. By reproducing those exact inputs, the hash
-    resolves to the SAME ``data/finetune_prepared/<hash>`` directory that step 09 already
-    populated -- the one that physically contains the ``train`` and ``validation`` splits.
-    We then load that DatasetDict and score its ``validation`` split. We do NOT regenerate
-    any data and we do NOT touch the test cohort or ``predict_prepared``.
+    ``generate_prepared_ds_path`` hashes (cohort_folder + tokenizer path +
+    validation_split_percentage + test_eval_ratio + split_by_patient + chronological_split, and
+    keep_demographic_prompt when set) to derive ``dataset_prepared_path/<hash>``. By reproducing
+    those exact inputs, the hash resolves to the SAME ``data/finetune_prepared/<hash>`` directory
+    that step 09 already populated -- the one that physically contains the ``train`` and
+    ``validation`` splits. If the hash does not resolve, a single subdirectory of
+    ``dataset_prepared_path`` with a ``validation`` split is used. We then load that DatasetDict and
+    score its ``validation`` split. We do NOT regenerate any data and we do NOT touch the test
+    cohort or ``predict_prepared``.
 
 Overrides relative to the fine-tuning config:
     model_name_or_path -> data/finetune_results   (the FINE-TUNED model)

@@ -1,10 +1,15 @@
 #!/usr/bin/env python
 """Step 09: Fine-tune CEHR-BERT for Alzheimer's Disease prediction.
 
-Fine-tunes on the fine-tuning cohort (``data/cehrbert_data/cohort/finetune`` from step 02) with an internal
-train/validation split (``validation_split_percentage``). Prediction is a separate step
-(step 10) on the held-out test cohort, so this step runs with ``do_predict: false`` - no
-test split is needed here, and the run completes in one launch.
+Fine-tunes on the fine-tuning cohort (``data/cehrbert_data/cohort/finetune`` from step 02). With
+``tokenized_full_dataset_path`` set (``data/full_tokenized``, step 07) the runner keeps the cohort
+members of that dataset, applies ``observation_window`` and uses its splits as they are: train is the
+canonical train split and validation the canonical val split. ``validation_split_percentage`` does
+not split the data in this flow; it must still lie in (0, 1) for the config check and it enters the
+hash of the prepared dataset directory (``data/finetune_prepared/<hash>``).
+
+Prediction is a separate step (step 10) on the held-out test cohort, so this step runs with
+``do_predict: false`` (a true value only produces a warning). No test split is needed here.
 
 Usage:
     python cehrbert_model/09_finetune.py

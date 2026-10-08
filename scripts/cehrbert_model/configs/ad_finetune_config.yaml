@@ -26,7 +26,9 @@ observation_window: 365
 # whatever the window, and keep them when the collator truncates to max_position_embeddings.
 keep_demographic_prompt: true
 
-# Fraction of the fine-tuning cohort used for validation (the rest is training).
+# Not used to split the data while tokenized_full_dataset_path is set: train and validation are the
+# canonical splits of data/full_tokenized. Still validated to lie in (0, 1) and part of the
+# prepared-dataset hash, so change it only together with a rerun of fine-tuning and step 11.
 # The held-out TEST set is a separate cohort created in cohort step 01 and scored in step 10.
 validation_split_percentage: 0.1
 

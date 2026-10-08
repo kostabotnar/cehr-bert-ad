@@ -1,10 +1,12 @@
 #!/usr/bin/env python
 """Step 08: Validate the finetuning config (dry run - no training).
 
-Parses ``configs/ad_finetune_config.yaml`` and verifies its upstream dependencies are in
-place: the pretrained model + tokenizer (steps 05/06), the tokenized full dataset
-(step 05), and the finetune cohort folder (step 02). Also checks value ranges, observation_window,
-and that do_predict is enabled (required to emit test predictions for step 10).
+Parses ``cehrbert_model/configs/ad_finetune_config.yaml`` against the cehrbert runner dataclasses
+and verifies its upstream dependencies are in place: the pretrained model + tokenizer (steps 05/06),
+the tokenized full dataset (step 07), and the finetune cohort folder with its schema (step 02).
+Also checks value ranges, observation_window > 0 and validation_split_percentage in (0, 1)
+(an error, although the full-tokenized flow does not use it to split). Warnings only: do_train or
+do_eval off, and do_predict on (prediction is step 10, on the held-out test cohort).
 
 Usage:
     python cehrbert_model/08_validate_finetune_config.py
