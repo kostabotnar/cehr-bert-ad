@@ -5,8 +5,9 @@ from __future__ import annotations
 import json
 
 
-def test_build_cohort_writes_splits(step, omop_dir, tmp_path):
+def test_build_cohort_writes_splits(step, omop_dir, tmp_path, monkeypatch):
     mod = step("cohort/01_build_cohort.py")
+    monkeypatch.setattr(mod, "MIN_CONCEPT_PATIENTS", 1)
     splits = tmp_path / "cohort" / "splits.parquet"
     rep = tmp_path / "rep06"
     rc = mod.main(
@@ -15,8 +16,6 @@ def test_build_cohort_writes_splits(step, omop_dir, tmp_path):
             str(omop_dir),
             "--splits-output",
             str(splits),
-            "--min-concept-patients",
-            "1",
             "--report-dir",
             str(rep),
         ]

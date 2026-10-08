@@ -18,8 +18,8 @@ Task framing ("predict AD anytime in the future"):
   * Inclusion, identical for both groups at index_date: age >= --min-age, index_date >=
     --index-floor, first visit <= index_date minus --window-days, and >= 1 event in
     [index_date - window, index_date). An event is a condition, drug, procedure or measurement row
-    linked to a visit whose standard concept is used by >= --min-concept-patients persons, the
-    events CEHR-BERT turns into sequence tokens. This keeps the cohort free of patients without a
+    linked to a visit whose standard concept is used by >= MIN_CONCEPT_PATIENTS persons (pipeline/omop_common.py, the same number as in cehrbert_model
+    step 01), the events CEHR-BERT turns into sequence tokens. This keeps the cohort free of patients without a
     CEHR-BERT sequence without reading any CEHR-BERT output.
   See pipeline/ad_cohort.py for the exact definitions.
 
@@ -32,7 +32,7 @@ The CEHR-BERT cohort folders for the finetune runner are derived from splits.par
 
 Usage:
     python cohort/01_build_cohort.py
-    python cohort/01_build_cohort.py --gap-days 730 --min-concept-patients 0
+    python cohort/01_build_cohort.py --gap-days 730
 """
 
 from __future__ import annotations
@@ -48,7 +48,7 @@ import polars as pl
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from pipeline import ad_cohort, paths  # noqa: E402
-from pipeline.omop_common import AD_CODE_PATTERNS, is_ad_source_value  # noqa: E402
+from pipeline.omop_common import AD_CODE_PATTERNS, MIN_CONCEPT_PATIENTS, is_ad_source_value  # noqa: E402
 from pipeline.omop_validation import table_glob  # noqa: E402
 from pipeline.reporting import StepReport  # noqa: E402
 
@@ -78,7 +78,7 @@ def build_cohort(
     index_floor: dt.date = dt.date(2000, 1, 1),
     followup_days: int = 365,
     seed: int = 42,
-    min_concept_patients: int = 100,
+    min_concept_patients: int = MIN_CONCEPT_PATIENTS,
 ) -> pl.DataFrame:
     """Build the cohort dataframe (person_id, index_date, label) and record stats on ``report``.
 
@@ -286,13 +286,6 @@ def main(argv: list[str] | None = None) -> int:
         help="Observation required after a control anchor (last visit >= anchor + this)",
     )
     parser.add_argument("--seed", type=int, default=42, help="Seed for the control anchor draw")
-    parser.add_argument(
-        "--min-concept-patients",
-        type=int,
-        default=100,
-        help="Event rule: standard concepts must be used by this many persons, as in "
-        "generate_included_concept_list --min_num_of_patients (0 disables the concept part)",
-    )
     parser.add_argument("--report-dir", default=str(paths.report_dir_for("cohort", "01_build_cohort")))
     args = parser.parse_args(argv)
 
@@ -316,7 +309,7 @@ def main(argv: list[str] | None = None) -> int:
             index_floor=args.index_floor,
             followup_days=args.control_followup_days,
             seed=args.seed,
-            min_concept_patients=args.min_concept_patients,
+            min_concept_patients=MIN_CONCEPT_PATIENTS,
         )
     except FileNotFoundError as exc:
         report.add_check("required OMOP tables present", False, detail=str(exc))
