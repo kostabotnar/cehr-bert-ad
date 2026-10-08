@@ -4,13 +4,17 @@ All paths are derived from ``PROJECT_ROOT`` so the scripts work regardless of th
 current working directory. ``PROJECT_ROOT`` is the repository root (``.../cehr-bert``),
 the parent of ``SCRIPTS_DIR`` (``scripts/``), which holds this package and one folder per part.
 
-Evaluation outputs (cehrbert_model validation predictions, evaluation) are nested per experiment under
-``build/<run_label>/``, where the run label encodes the experiment parameters
-(look-back window in days and CEHR-BERT token cap). The label format is
-``w_<window>_ctx<ctx>`` (e.g. ``w_all_ctx4096``, ``w_365_ctx512``), with
-``window`` being ``"all"`` for an unbounded look-back. Use ``run_label`` to build
-the label and the label-aware ``*_dir`` functions below to resolve concrete
-output locations under a given experiment folder.
+Each part writes under its own build root (``build/<part>/``):
+
+  * data_qc             : ``omop_profile/`` and ``history_length/``
+  * cehrbert_model      : ``<run_label>/`` with the run label ``w_<window>_ctx<ctx>``
+                          (e.g. ``w_all_ctx4096``, ``w_365_ctx512``; ``all`` means an unbounded look-back)
+  * classical_ml        : ``<window_label>/`` with the window-only label ``w_<window>`` (no token context)
+  * evaluation          : ``<comparison name>/``
+  * feature_importance  : ``<run_label>/``
+
+The model parts describe their predictions in a ``predictions_manifest.json`` inside their label folder;
+the evaluation part reads only those manifests.
 """
 
 from __future__ import annotations
@@ -73,14 +77,20 @@ PREDICT_PREPARED_DIR = DATA_DIR / "predict_prepared"
 TEST_PREDICTIONS_DIR = FINETUNE_RESULTS_DIR / "test_predictions"
 VAL_PREDICTIONS_DIR = FINETUNE_RESULTS_DIR / "validation_predictions"
 
-# Evaluation outputs (cehrbert_model step 11, evaluation) live under build/, nested per experiment in
-# build/<run_label>/ (see run_label / the label-aware *_dir functions below).
+# Every part writes under its own build root, nested per experiment label (see the helpers below).
 BUILD_DIR = PROJECT_ROOT / "build"
+DATA_QC_BUILD_DIR = BUILD_DIR / "data_qc"
+CEHRBERT_MODEL_BUILD_DIR = BUILD_DIR / "cehrbert_model"
+CLASSICAL_ML_BUILD_DIR = BUILD_DIR / "classical_ml"
+EVALUATION_BUILD_DIR = BUILD_DIR / "evaluation"
+FEATURE_IMPORTANCE_BUILD_DIR = BUILD_DIR / "feature_importance"
 
 # Raw OMOP profile (data_qc step 01): tables, figures and exclusion flow of AD cases versus controls.
-OMOP_PROFILE_DIR = BUILD_DIR / "omop_profile"
-# Other data_qc outputs (patient history length statistics).
-DATA_QC_BUILD_DIR = BUILD_DIR / "data_qc"
+OMOP_PROFILE_DIR = DATA_QC_BUILD_DIR / "omop_profile"
+# Patient history length statistics (data_qc step 02).
+HISTORY_LENGTH_DIR = DATA_QC_BUILD_DIR / "history_length"
+
+MANIFEST_NAME = "predictions_manifest.json"
 
 # Defaults for the experiment parameters that make up a run label.
 # These match ad_finetune_config.yaml (observation_window) and the pretrained model's
@@ -89,58 +99,88 @@ DEFAULT_WINDOW_DAYS = 365
 DEFAULT_CTX = 512
 
 
-def run_label(window_days, ctx) -> str:
-    """Build a run label, e.g. ``'w_all_ctx4096'`` or ``'w_365_ctx512'``.
-
-    ``window_days`` of ``None`` or negative encodes an unbounded ("all") look-back.
-    """
+def window_label(window_days) -> str:
+    """Window-only label, e.g. ``'w_365'`` or ``'w_all'`` (``None`` or negative = unbounded)."""
     w = "all" if window_days is None or int(window_days) < 0 else str(int(window_days))
-    return f"w_{w}_ctx{int(ctx)}"
+    return f"w_{w}"
 
 
-def run_dir(label: str) -> Path:
-    """Per-experiment output folder, e.g. ``build/w_365_ctx512``."""
-    return BUILD_DIR / label
+def run_label(window_days, ctx) -> str:
+    """Build a run label, e.g. ``'w_all_ctx4096'`` or ``'w_365_ctx512'``."""
+    return f"{window_label(window_days)}_ctx{int(ctx)}"
 
 
-def eval_results_dir(label: str) -> Path:
-    """Evaluation results folder for a run (metrics.json / stats json live here)."""
-    return run_dir(label)
+# --- cehrbert_model: build/cehrbert_model/<run_label>/ ---------------------
+def cehrbert_model_dir(label: str) -> Path:
+    return CEHRBERT_MODEL_BUILD_DIR / label
 
 
-def figures_dir(label: str) -> Path:
-    """Figures folder for a run, e.g. ``build/w_365_ctx512/figures``."""
-    return run_dir(label) / "figures"
+def cehrbert_figures_dir(label: str) -> Path:
+    return cehrbert_model_dir(label) / "figures"
 
 
-def build_reports_dir(label: str) -> Path:
-    """Reports folder for a run, e.g. ``build/w_365_ctx512/reports``."""
-    return run_dir(label) / "reports"
+def cehrbert_report_dir(step_name: str, label: str) -> Path:
+    return cehrbert_model_dir(label) / "reports" / step_name
 
 
-def build_report_dir_for(step_name: str, label: str) -> Path:
-    """Report directory for a step within a run, e.g. build/<label>/reports/01_evaluate."""
-    return build_reports_dir(label) / step_name
+def cehrbert_manifest_path(label: str) -> Path:
+    return cehrbert_model_dir(label) / MANIFEST_NAME
 
 
-def baselines_dir(label: str) -> Path:
-    """Baselines folder for a run, e.g. ``build/w_365_ctx512/baselines``."""
-    return run_dir(label) / "baselines"
+def cehrbert_linear_probe_dir(label: str) -> Path:
+    return cehrbert_model_dir(label) / "linear_probe"
 
 
-def features_dir(label: str) -> Path:
-    """Baseline features folder for a run, e.g. ``build/w_365_ctx512/baselines/features``."""
-    return baselines_dir(label) / "features"
+def cehrbert_linear_probe_features_dir(label: str) -> Path:
+    return cehrbert_linear_probe_dir(label) / "features"
 
 
-def linear_probe_dir(label: str) -> Path:
-    """Frozen-CEHR-BERT linear probe folder for a run, e.g. ``build/w_365_ctx512/linear_probe``."""
-    return run_dir(label) / "linear_probe"
+# --- classical_ml: build/classical_ml/<window_label>/ ----------------------
+def classical_ml_dir(wlabel: str) -> Path:
+    return CLASSICAL_ML_BUILD_DIR / wlabel
 
 
-def linear_probe_features_dir(label: str) -> Path:
-    """Per-split frozen-model features, e.g. ``build/w_365_ctx512/linear_probe/features``."""
-    return linear_probe_dir(label) / "features"
+def classical_features_dir(wlabel: str) -> Path:
+    return classical_ml_dir(wlabel) / "features"
+
+
+def classical_report_dir(step_name: str, wlabel: str) -> Path:
+    return classical_ml_dir(wlabel) / "reports" / step_name
+
+
+def classical_manifest_path(wlabel: str) -> Path:
+    return classical_ml_dir(wlabel) / MANIFEST_NAME
+
+
+# --- evaluation: build/evaluation/<comparison name>/ -----------------------
+def evaluation_dir(name: str) -> Path:
+    return EVALUATION_BUILD_DIR / name
+
+
+def evaluation_model_dir(name: str, model: str) -> Path:
+    """Per-model scoring outputs: ``metrics.json``, ``figures/``, ``reports/01_evaluate/``."""
+    return evaluation_dir(name) / "models" / model
+
+
+def evaluation_figures_dir(name: str) -> Path:
+    return evaluation_dir(name) / "figures"
+
+
+def evaluation_report_dir(step_name: str, name: str) -> Path:
+    return evaluation_dir(name) / "reports" / step_name
+
+
+# --- feature_importance: build/feature_importance/<run_label>/ -------------
+def feature_importance_dir(label: str) -> Path:
+    return FEATURE_IMPORTANCE_BUILD_DIR / label
+
+
+def feature_importance_figures_dir(label: str) -> Path:
+    return feature_importance_dir(label) / "figures"
+
+
+def feature_importance_report_dir(step_name: str, label: str) -> Path:
+    return feature_importance_dir(label) / "reports" / step_name
 
 
 # Labeled cohort (cohort step 01), built from the OMOP tables only: one row per patient with

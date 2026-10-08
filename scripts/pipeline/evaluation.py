@@ -40,6 +40,11 @@ from sklearn.metrics import (
 PROBABILITY_COLUMN = "predicted_boolean_probability"
 LABEL_COLUMN = "boolean_value"
 
+# Scoring settings shared by every model so that their intervals are comparable (evaluation steps 01 and 02).
+EVAL_N_BOOTSTRAP = 2000
+EVAL_SEED = 42
+EVAL_CAL_BINS = 10
+
 # Clip probabilities away from {0, 1} before logit transforms (calibration slope).
 _EPS = 1e-7
 
