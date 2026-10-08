@@ -16,6 +16,7 @@ from .omop_validation import table_glob
 # Minimum distinct patients a concept needs. Single source for the cehrbert_data concept list
 # (cehrbert_model step 01) and the cohort event rule (cohort step 01): a cohort patient's window events
 # must become CEHR-BERT tokens, so both sides have to use the same number.
+# The classical baselines (classical_ml step 01) take their concept vocabulary from the same set.
 MIN_CONCEPT_PATIENTS = 100
 
 AD_CODE_PATTERNS = [r"ICD-9-CM:331\.0", r"ICD-10-CM:G30"]

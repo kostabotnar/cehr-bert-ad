@@ -103,8 +103,8 @@ def _write_omop(root: Path, person, cond, drug, proc, visit) -> Path:
         _write_table(
             root,
             table,
-            dict(zip(["person_id", concept_col, date_col], zip(*rows))),
-            {"person_id": i64, concept_col: i64, date_col: date},
+            dict(zip(["person_id", concept_col, date_col], zip(*rows))) | {"visit_occurrence_id": [1] * len(rows)},
+            {"person_id": i64, concept_col: i64, date_col: date, "visit_occurrence_id": i64},
         )
     _write_table(
         root,
@@ -178,24 +178,52 @@ def test_build_visit_features(small_omop):
     assert visit["n_visits"].to_list() == [1, 1]
 
 
-def _fit(small_omop, min_prevalence):
+def _fit(small_omop, qualified):
     train = _cohort([1, 2], index_date=INDEX)
     counts = bl.build_counts(train, small_omop, 365)
     demo = bl.build_demographics(train, small_omop)
     visit = bl.build_visit_features(train, small_omop, 365)
-    return bl.fit_feature_spec(counts, demo, train.height, min_prevalence, 365, visit_features=visit)
+    return bl.fit_feature_spec(
+        counts, demo, pl.Series("concept_id", qualified, dtype=pl.Int64), 100, 365, visit_features=visit
+    )
 
 
 def test_vocabulary_fit_on_train_only(small_omop):
-    spec = _fit(small_omop, 0.5)
+    spec = _fit(small_omop, [100, 102, 200, 300, 999])
     assert spec.code_features == ["cond:100", "cond:102", "drug:200", "proc:300"]
-    assert "cond:999" not in spec.feature_names
+    assert "cond:999" not in spec.feature_names  # qualified, but only a test patient has it
     assert spec.gender_categories == [8507, 8532]
-    assert _fit(small_omop, 0.6).code_features == ["cond:100"]
+    assert spec.min_concept_patients == 100
+
+
+def test_unqualified_concept_dropped_even_if_frequent_on_train(small_omop):
+    # cond:100 is in both train windows, the most frequent concept
+    spec = _fit(small_omop, [102, 200, 300])
+    assert spec.code_features == ["drug:200", "cond:102", "proc:300"] or sorted(spec.code_features) == [
+        "cond:102",
+        "drug:200",
+        "proc:300",
+    ]
+    assert "cond:100" not in spec.code_features
+
+
+def test_qualified_concept_absent_from_train_windows_dropped(small_omop):
+    # 101 is before the window, 103 after the index date, 201 after the index date
+    spec = _fit(small_omop, [100, 101, 103, 201])
+    assert spec.code_features == ["cond:100"]
+
+
+def test_feature_spec_json_round_trip_and_old_spec_error(small_omop):
+    spec = _fit(small_omop, [100])
+    assert bl.FeatureSpec.from_json(spec.to_json()) == spec
+    assert spec.to_json()["min_concept_patients"] == 100
+    old = {k: v for k, v in spec.to_json().items() if k != "min_concept_patients"} | {"min_prevalence": 0.01}
+    with pytest.raises(ValueError, match="rerun classical_ml/01_prepare_features.py"):
+        bl.FeatureSpec.from_json(old)
 
 
 def test_assemble_matrix_width_and_values(small_omop):
-    spec = _fit(small_omop, 0.5)
+    spec = _fit(small_omop, [100, 102, 200, 300])
     names = spec.feature_names
 
     test = _cohort([9], index_date=INDEX)
@@ -311,13 +339,16 @@ def baseline_run(tmp_path_factory):
 
     features = root / "features"
     baselines = root / "baselines"
-    rc11 = load_step("classical_ml/01_prepare_features.py").main(
+    step11 = load_step("classical_ml/01_prepare_features.py")
+    # 60 patients cannot reach the real threshold of 100 persons per concept
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(step11, "MIN_CONCEPT_PATIENTS", 3)
+        rc11 = step11.main(
         [
             "--data-dir", str(root / "omop"),
             "--splits-file", str(root / "splits.parquet"),
             "--output-dir", str(features),
             "--report-dir", str(root / "reports" / "11"),
-            "--min-prevalence", "0.05",
         ]
     )  # fmt: skip
     rc12 = load_step("classical_ml/02_train_baselines.py").main(

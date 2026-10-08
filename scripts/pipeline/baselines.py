@@ -16,8 +16,10 @@ patient's index_date** and limited to a fixed look-back window (365 days, matchi
   * demographics: age at index, one-hot gender, one-hot race
 
 The vocabulary (which concepts become columns) and the demographic categories are fit on
-**train only** (concepts present in at least ``min_prevalence`` of training patients are
-kept), then applied unchanged to val/test, so there is no train/test leakage.
+**train only**, then applied unchanged to val/test, so there is no train/test leakage. A concept
+becomes a column when it is in the qualified set shared with CEHR-BERT and the cohort
+(``ad_cohort.qualified_concepts`` with ``omop_common.MIN_CONCEPT_PATIENTS``) and occurs in at least
+one training patient's window.
 
 The module is deliberately model-free and depends only on polars / numpy / scipy so it is
 cheap to unit-test with synthetic fixtures.
@@ -48,7 +50,6 @@ DOMAINS: List[Tuple[str, str, str, str]] = [
 ]
 
 DEFAULT_WINDOW_DAYS = 365
-DEFAULT_MIN_PREVALENCE = 0.01
 
 # Per-domain feature encoding. Conditions become presence/absence indicators (binary),
 # while drugs and procedures keep their raw occurrence counts. ``assemble_matrix`` maps a
@@ -246,7 +247,7 @@ class FeatureSpec:
     gender_categories: List[int]
     race_categories: List[int]
     age_median: float
-    min_prevalence: float
+    min_concept_patients: int  # threshold that produced the qualified concept set
     window_days: int
     domain_encoding: Dict[str, str]  # domain prefix -> "binary" | "count"
     history_median: float = 0.0  # median history_length_days (confound control)
@@ -268,7 +269,7 @@ class FeatureSpec:
             "gender_categories": self.gender_categories,
             "race_categories": self.race_categories,
             "age_median": self.age_median,
-            "min_prevalence": self.min_prevalence,
+            "min_concept_patients": self.min_concept_patients,
             "window_days": self.window_days,
             "domain_encoding": dict(self.domain_encoding),
             "history_median": self.history_median,
@@ -278,12 +279,17 @@ class FeatureSpec:
 
     @classmethod
     def from_json(cls, d: dict) -> "FeatureSpec":
+        if "min_prevalence" in d or "min_concept_patients" not in d:
+            raise ValueError(
+                "feature_spec.json was written by an older step 01 (min_prevalence vocabulary); "
+                "rerun classical_ml/01_prepare_features.py to rebuild the features"
+            )
         return cls(
             code_features=list(d["code_features"]),
             gender_categories=list(d["gender_categories"]),
             race_categories=list(d["race_categories"]),
             age_median=float(d["age_median"]),
-            min_prevalence=float(d["min_prevalence"]),
+            min_concept_patients=int(d["min_concept_patients"]),
             window_days=int(d["window_days"]),
             domain_encoding=dict(d.get("domain_encoding", DOMAIN_ENCODING)),
             history_median=float(d.get("history_median", 0.0)),
@@ -294,13 +300,16 @@ class FeatureSpec:
 def fit_feature_spec(
     train_counts: pl.DataFrame,
     train_demo: pl.DataFrame,
-    n_train: int,
-    min_prevalence: float,
+    qualified: pl.Series,
+    min_concept_patients: int,
     window_days: int,
     domain_encoding: Dict[str, str] = DOMAIN_ENCODING,
     visit_features: pl.DataFrame | None = None,
 ) -> FeatureSpec:
     """Select the kept concept vocabulary + demographic categories from training data only.
+
+    A concept is kept when it is in ``qualified`` (concept ids from ``ad_cohort.qualified_concepts``)
+    and occurs in at least one training window; ``min_concept_patients`` is only recorded on the spec.
 
     When ``visit_features`` (output of :func:`build_visit_features`) is supplied, the median
     ``history_length_days`` (ignoring nulls) and median ``n_visits`` are stored on the spec
@@ -308,16 +317,15 @@ def fit_feature_spec(
     leaves the medians at ``0.0``.
     """
     if train_counts.height:
-        prevalence = (
-            train_counts.select("person_id", "feature")
+        concept = pl.col("feature").str.split(":").list.last().cast(pl.Int64)
+        code_features = (
+            train_counts.select("feature")
             .unique()
-            .group_by("feature")
-            .agg(n=pl.len())
-            .with_columns(prev=pl.col("n") / max(n_train, 1))
-            .filter(pl.col("prev") >= min_prevalence)
+            .filter(concept.is_in(qualified.cast(pl.Int64)))
             .sort("feature")
+            .get_column("feature")
+            .to_list()
         )
-        code_features = prevalence.get_column("feature").to_list()
     else:
         code_features = []
 
@@ -353,7 +361,7 @@ def fit_feature_spec(
         gender_categories=[int(g) for g in gender],
         race_categories=[int(r) for r in race],
         age_median=age_median,
-        min_prevalence=min_prevalence,
+        min_concept_patients=min_concept_patients,
         window_days=window_days,
         domain_encoding=dict(domain_encoding),
         history_median=history_median,
