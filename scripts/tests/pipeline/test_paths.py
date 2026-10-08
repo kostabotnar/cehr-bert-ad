@@ -64,11 +64,17 @@ def test_each_part_writes_under_its_own_build_root():
     b = paths.BUILD_DIR
     assert paths.OMOP_PROFILE_DIR == b / "data_qc" / "omop_profile"
     assert paths.HISTORY_LENGTH_DIR == b / "data_qc" / "history_length"
-    assert paths.cehrbert_report_dir("12_token_stats", label) == b / "cehrbert_model" / label / "reports" / "12_token_stats"
+    assert (
+        paths.cehrbert_report_dir("12_token_stats", label)
+        == b / "cehrbert_model" / label / "reports" / "12_token_stats"
+    )
     assert paths.cehrbert_linear_probe_features_dir(label) == b / "cehrbert_model" / label / "linear_probe" / "features"
     assert paths.cehrbert_manifest_path(label) == b / "cehrbert_model" / label / "predictions_manifest.json"
     assert paths.classical_features_dir(wlabel) == b / "classical_ml" / "w_365" / "features"
     assert paths.classical_manifest_path(wlabel) == b / "classical_ml" / "w_365" / "predictions_manifest.json"
     assert paths.evaluation_model_dir("cmp", "lr") == b / "evaluation" / "cmp" / "models" / "lr"
-    assert paths.evaluation_report_dir("02_compare_models", "cmp") == b / "evaluation" / "cmp" / "reports" / "02_compare_models"
+    assert (
+        paths.evaluation_report_dir("02_compare_models", "cmp")
+        == b / "evaluation" / "cmp" / "reports" / "02_compare_models"
+    )
     assert paths.feature_importance_report_dir("03_x", label) == b / "feature_importance" / label / "reports" / "03_x"

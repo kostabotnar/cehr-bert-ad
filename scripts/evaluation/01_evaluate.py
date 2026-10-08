@@ -230,7 +230,6 @@ def evaluate_model(
     return _finalize(report, report_dir)
 
 
-
 def _add_scoring_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--n-bootstrap", type=int, default=ev.EVAL_N_BOOTSTRAP)
     parser.add_argument("--cal-bins", type=int, default=ev.EVAL_CAL_BINS)

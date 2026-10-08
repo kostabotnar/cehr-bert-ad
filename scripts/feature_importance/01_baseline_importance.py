@@ -126,14 +126,19 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     label = paths.run_label(args.window_days, args.ctx)
-    classical_dir = Path(args.classical_dir) if args.classical_dir else paths.classical_ml_dir(paths.window_label(args.window_days))
+    classical_dir = (
+        Path(args.classical_dir) if args.classical_dir else paths.classical_ml_dir(paths.window_label(args.window_days))
+    )
     output_dir = Path(args.output_dir) if args.output_dir else paths.feature_importance_dir(label)
     feature_names_path = classical_dir / "features" / "feature_names.json"
 
     if not feature_names_path.is_file():
         available = sorted(str(p) for p in paths.CLASSICAL_ML_BUILD_DIR.glob("*/features") if p.is_dir())
         print(f"feature_names.json not found at {feature_names_path}")
-        print("Available classical_ml feature folders (use --window-days to select one):\n  " + ("\n  ".join(available) or "(none)"))
+        print(
+            "Available classical_ml feature folders (use --window-days to select one):\n  "
+            + ("\n  ".join(available) or "(none)")
+        )
         return 1
 
     feature_names = json.loads(feature_names_path.read_text(encoding="utf-8"))

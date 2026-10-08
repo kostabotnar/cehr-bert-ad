@@ -49,6 +49,7 @@ from pipeline.reporting import StepReport  # noqa: E402
 # Operating point reported in the comparison table (matches 01_evaluate's headline).
 PRIMARY_METHOD = "youden"
 
+
 # --------------------------------------------------------------------------- #
 # Metrics loading + table formatting
 # --------------------------------------------------------------------------- #

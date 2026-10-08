@@ -269,7 +269,9 @@ def main(argv: list[str] | None = None) -> int:
     output_dir = Path(args.output_dir) if args.output_dir else paths.feature_importance_dir(label) / "attention"
     fig_dir = paths.feature_importance_figures_dir(label)
     report_dir = (
-        Path(args.report_dir) if args.report_dir else paths.feature_importance_report_dir("02_attention_analysis", label)
+        Path(args.report_dir)
+        if args.report_dir
+        else paths.feature_importance_report_dir("02_attention_analysis", label)
     )
     output_dir.mkdir(parents=True, exist_ok=True)
 

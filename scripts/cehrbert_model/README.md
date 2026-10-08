@@ -109,12 +109,20 @@ data/
     ├── test_results.json               roc_auc, pr_auc, test_loss                            (step 10)
     ├── validation_predictions/*.parquet                                                      (step 11)
     └── validation_results.json         roc_auc, pr_auc, val_loss                             (step 11)
-build/<run_label>/
+build/cehrbert_model/<run_label>/       run label: w_<window>_ctx<ctx>
 ├── token_stats.json, figures/token_length_hist.png                                           (step 12)
-└── linear_probe/                       features/<split>/ (step 13), <kind>/ predictions (step 14)
+├── linear_probe/                       features/<split>/ (step 13), <kind>/ predictions (step 14)
+└── predictions_manifest.json           cehrbert_finetuned (step 11), linear_probe_cls and
+                                         linear_probe_mean (step 14); read by evaluation
 ```
+
+The part only produces predictions. Step 11 adds `cehrbert_finetuned` (the step 10 test predictions
+and the step 11 validation predictions in `data/finetune_results/`) to the manifest, and skips that
+entry with a warning when the test predictions are missing. Step 14 adds both linear probe
+kinds; the kind with the lower validation AUROC is marked `secondary`. Scoring and comparison are in the
+[evaluation](../evaluation/README.md) part.
 
 cehrbert_data caches its measurement events in `omop_input/processed_measurement` and reuses them
 on the next run, so delete that folder when the OMOP data changes. Step reports go to
 `scripts/cehrbert_model/reports/<step>/` for steps 00 to 10 and to
-`build/<run_label>/reports/<step>/` for steps 11 to 14.
+`build/cehrbert_model/<run_label>/reports/<step>/` for steps 11 to 14.

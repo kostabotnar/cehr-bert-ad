@@ -66,9 +66,7 @@ def main(argv: list[str] | None = None) -> int:
     label = paths.run_label(args.window_days, args.ctx)
     features_dir = Path(args.features_dir) if args.features_dir else paths.cehrbert_linear_probe_features_dir(label)
     output_dir = Path(args.output_dir) if args.output_dir else paths.cehrbert_linear_probe_dir(label)
-    report_dir = (
-        Path(args.report_dir) if args.report_dir else paths.cehrbert_report_dir("14_train_linear_probe", label)
-    )
+    report_dir = Path(args.report_dir) if args.report_dir else paths.cehrbert_report_dir("14_train_linear_probe", label)
 
     report = StepReport("14_train_linear_probe", title="Step 14 - Linear probe on frozen CEHR-BERT")
     for name, value in (

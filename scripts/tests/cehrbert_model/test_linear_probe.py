@@ -715,6 +715,8 @@ def test_search_grid_matches_plan():
 
 def test_probe_paths_use_run_label():
     label = paths.run_label(365, 512)
-    assert paths.cehrbert_linear_probe_features_dir(label).as_posix().endswith(
-        "build/cehrbert_model/w_365_ctx512/linear_probe/features"
+    assert (
+        paths.cehrbert_linear_probe_features_dir(label)
+        .as_posix()
+        .endswith("build/cehrbert_model/w_365_ctx512/linear_probe/features")
     )

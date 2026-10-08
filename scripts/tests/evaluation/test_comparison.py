@@ -131,7 +131,11 @@ def test_step01_missing_default_manifest_warns_and_no_model_fails(step, run_dir,
     monkeypatch.setattr(paths, "CLASSICAL_ML_BUILD_DIR", run_dir / "classical_ml")
     lr = MODELS["lr"]
     entry = mf.make_entry(
-        "lr", lr[0], lr[2], run_dir / "preds" / "lr" / "test_predictions", run_dir / "preds" / "lr" / "validation_predictions"
+        "lr",
+        lr[0],
+        lr[2],
+        run_dir / "preds" / "lr" / "test_predictions",
+        run_dir / "preds" / "lr" / "validation_predictions",
     )
     mf.upsert_models(paths.classical_manifest_path(paths.window_label(365)), [entry])
     module = step("evaluation/01_evaluate.py")

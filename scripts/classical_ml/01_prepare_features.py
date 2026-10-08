@@ -59,7 +59,11 @@ def main(argv: list[str] | None = None) -> int:
         help="Look-back window in days; negative => unbounded (all history)",
     )
     parser.add_argument("--min-prevalence", type=float, default=bl.DEFAULT_MIN_PREVALENCE)
-    parser.add_argument("--report-dir", default=None, help="Report dir (default: build/classical_ml/<window_label>/reports/01_prepare_features)")
+    parser.add_argument(
+        "--report-dir",
+        default=None,
+        help="Report dir (default: build/classical_ml/<window_label>/reports/01_prepare_features)",
+    )
     args = parser.parse_args(argv)
 
     label = paths.window_label(args.window_days)

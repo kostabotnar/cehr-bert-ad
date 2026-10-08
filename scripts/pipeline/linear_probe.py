@@ -28,7 +28,6 @@ from sklearn.model_selection import GridSearchCV, StratifiedKFold
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
-
 FEATURE_KINDS = ("cls", "mean")
 SPLIT_NAMES = ("train", "val", "test")
 

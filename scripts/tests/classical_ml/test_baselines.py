@@ -377,7 +377,16 @@ def test_evaluation_steps_score_and_compare_the_manifest(baseline_run, step, tmp
     root = baseline_run["root"]
     manifest_path = str(root / "predictions_manifest.json")
     rc = step("evaluation/01_evaluate.py").main(
-        ["--manifest", manifest_path, "--name", "cmp", "--n-bootstrap", "20", "--report-dir", str(root / "reports" / "e1")]
+        [
+            "--manifest",
+            manifest_path,
+            "--name",
+            "cmp",
+            "--n-bootstrap",
+            "20",
+            "--report-dir",
+            str(root / "reports" / "e1"),
+        ]
     )
     assert rc == 0
     models_dir = tmp_path / "evaluation" / "cmp" / "models"
@@ -385,7 +394,16 @@ def test_evaluation_steps_score_and_compare_the_manifest(baseline_run, step, tmp
     assert (models_dir / "xgboost" / "figures" / "roc_curve.png").is_file()
 
     rc = step("evaluation/02_compare_models.py").main(
-        ["--manifest", manifest_path, "--name", "cmp", "--splits-file", str(root / "splits.parquet"), "--n-bootstrap", "20"]
+        [
+            "--manifest",
+            manifest_path,
+            "--name",
+            "cmp",
+            "--splits-file",
+            str(root / "splits.parquet"),
+            "--n-bootstrap",
+            "20",
+        ]
     )
     assert rc == 0
     for rel in ("comparison.json", "comparison.md", "figures/compare_roc.png", "figures/compare_pr.png"):

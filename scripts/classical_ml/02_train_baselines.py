@@ -166,7 +166,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--cv-folds", type=int, default=5)
     parser.add_argument("--xgb-iter", type=int, default=30, help="Number of RandomizedSearchCV samples for XGBoost")
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--report-dir", default=None, help="Report dir (default: build/classical_ml/<window_label>/reports/02_train_baselines)")
+    parser.add_argument(
+        "--report-dir",
+        default=None,
+        help="Report dir (default: build/classical_ml/<window_label>/reports/02_train_baselines)",
+    )
     args = parser.parse_args(argv)
 
     label = paths.window_label(args.window_days)

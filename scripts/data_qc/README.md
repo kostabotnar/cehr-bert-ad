@@ -26,7 +26,7 @@ visit dates). It reads only the OMOP tables. Concept groups live in
 for a fast run, `--skip-sections measurement,duplicates` to drop the heaviest parts, `--date-floor`,
 `--seed`, `--out-dir`.
 
-Outputs in `build/omop_profile/`: `profile.json`, `table1.csv` and `table1.md` (with standardized
+Outputs in `build/data_qc/omop_profile/`: `profile.json`, `table1.csv` and `table1.md` (with standardized
 mean differences versus AD), `exclusion_flow.csv`, `figures/`.
 
 ## Step 02: history length
@@ -35,6 +35,6 @@ mean differences versus AD), `exclusion_flow.csv`, `figures/`.
 and the first visit per person from `visit_occurrence`. Reported overall and by label (cases versus
 controls). Options: `--data-dir`, `--splits-file`, `--results-dir`, `--figures-dir`.
 
-Outputs in `build/data_qc/`: `history_length_stats.json`, `figures/history_length_hist.png`.
+Outputs in `build/data_qc/history_length/`: `history_length_stats.json`, `figures/history_length_hist.png`.
 
 Reports go to `scripts/data_qc/reports/`.

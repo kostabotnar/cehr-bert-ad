@@ -29,8 +29,13 @@ scripts/
 
 Step reports go to `scripts/<part>/reports/<step>/`, and each runner writes
 `scripts/<part>/reports/summary.md`. Reports of the steps that depend on the run label (token
-context and look-back window) go to `build/<run_label>/reports/<step>/`. All `reports/` folders are
-git-ignored.
+context and look-back window) go to the part's build root, `build/<part>/<label>/reports/<step>/`. All
+`reports/` folders are git-ignored.
+
+Each part writes under its own build root: `build/data_qc/`, `build/cehrbert_model/<run_label>/`,
+`build/classical_ml/<window_label>/`, `build/evaluation/<name>/` and `build/feature_importance/<run_label>/`.
+The run label is `w_<window>_ctx<ctx>` (default `w_365_ctx512`), the window label (classical ML, which does not
+depend on the token context) is `w_<window>`, and the comparison name defaults to the cehrbert run label.
 
 ## Dependencies between parts
 
@@ -54,15 +59,23 @@ The files that one part writes and another reads.
 | `data/cohort/splits.parquet` with `person_id, index_date, label, split` (train/val/test) | cohort | data_qc, cehrbert_model, classical_ml, evaluation |
 | `data/cehrbert_data/` (sequences, cohort folders, `patient_sequence_pretrain`) | cehrbert_model | cehrbert_model |
 | `data/pretrain_results/`, `data/full_tokenized/`, `data/finetune_results/` (fine-tuned model) | cehrbert_model | cehrbert_model, feature_importance |
-| `data/finetune_results/{test,validation}_predictions/*.parquet` | cehrbert_model | evaluation |
-| `build/<label>/linear_probe/<kind>/{test,validation}_predictions/` and `summary.json` | cehrbert_model | evaluation |
-| `build/<label>/baselines/features/` | classical_ml | classical_ml |
-| `build/<label>/baselines/{lr,xgboost}/{test,validation}_predictions/`, `model.joblib` | classical_ml | evaluation, feature_importance |
-| `build/<label>/metrics.json` and `build/<label>/<model>/metrics.json` | evaluation | evaluation |
-| `build/<label>/baselines/{lr,xgboost}/feature_importance.csv` | feature_importance | feature_importance |
-| `build/<label>/attention/concept_attribution_*.csv` | feature_importance | feature_importance |
-| `build/<label>/feature_tables/` | feature_importance | (final tables) |
-| `build/omop_profile/`, `build/data_qc/` | data_qc | (QC output) |
+| `data/finetune_results/{test,validation}_predictions/*.parquet` | cehrbert_model | cehrbert_model (manifest entry) |
+| `build/cehrbert_model/<run_label>/predictions_manifest.json` (models `cehrbert_finetuned`, `linear_probe_cls`, `linear_probe_mean`) | cehrbert_model | evaluation |
+| `build/cehrbert_model/<run_label>/linear_probe/<kind>/{test,validation}_predictions/` and `summary.json` | cehrbert_model | cehrbert_model (manifest entry) |
+| `build/classical_ml/<window_label>/features/` | classical_ml | classical_ml |
+| `build/classical_ml/<window_label>/{lr,xgboost}/{test,validation}_predictions/`, `model.joblib` | classical_ml | evaluation (via the manifest), feature_importance |
+| `build/classical_ml/<window_label>/predictions_manifest.json` (models `lr`, `xgboost`) | classical_ml | evaluation |
+| `build/evaluation/<name>/models/<model>/metrics.json` | evaluation | evaluation |
+| `build/evaluation/<name>/comparison.{json,md}`, `figures/` | evaluation | (final results) |
+| `build/feature_importance/<run_label>/{lr,xgboost}/feature_importance.csv` | feature_importance | feature_importance |
+| `build/feature_importance/<run_label>/attention/concept_attribution_*.csv` | feature_importance | feature_importance |
+| `build/feature_importance/<run_label>/feature_tables/` | feature_importance | (final tables) |
+| `build/data_qc/omop_profile/`, `build/data_qc/history_length/` | data_qc | (QC output) |
+
+A prediction manifest is `{"models": [{"name", "display_label", "family", "test_predictions",
+"validation_predictions", "secondary"}]}`, with prediction paths relative to the project root (or absolute
+outside it). The model parts write predictions and the manifest only; the evaluation part does all scoring
+and comparison, reading the manifests (`--manifest`, or the defaults for the chosen window and ctx).
 
 Prediction folders use the CEHR-BERT schema: `subject_id, prediction_time,
 predicted_boolean_probability, predicted_boolean_value, boolean_value`. The run label is
@@ -88,7 +101,8 @@ bash scripts/cehrbert_model/run.sh --from 07
 
 - `--parts a,b,...` parts to run (default all).
 - `--link <path>` OMOP data folder, passed to data_verification.
-- `--ctx <int>` token context, passed to cehrbert_model, classical_ml, evaluation, feature_importance.
+- `--ctx <int>` token context, passed to cehrbert_model, evaluation, feature_importance (classical_ml does not use it).
+- `--name <text>` comparison name (`build/evaluation/<name>/`), passed to evaluation.
 - `--observation-window <int>` look-back in days (negative means all history). Passed as
   `--observation-window` to cehrbert_model and as `--window-days` to classical_ml, evaluation and
   feature_importance.

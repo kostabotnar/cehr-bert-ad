@@ -32,19 +32,22 @@ log1p-scaled and MaxAbs-scaled, so magnitudes are roughly comparable), XGBoost b
 `data/omop_data/concept/`; in a de-identified dataset the name is the source vocabulary code, so
 pass an Athena CONCEPT table with `--concept-table` for real descriptions.
 
-Outputs in `build/<run_label>/baselines/`: `lr/feature_importance.csv`,
-`xgboost/feature_importance.csv`.
+Models and feature names are read from `build/classical_ml/<window_label>/`. Outputs in
+`build/feature_importance/<run_label>/`: `lr/feature_importance.csv`, `xgboost/feature_importance.csv`.
 
 ## Step 02
 
 Runs the fine-tuned classifier over the held-out test cohort with attention output (eager
 attention, no sample packing) and attributes each prediction to concept tokens with three methods:
 raw last-layer [CLS] attention, attention rollout and gradient-weighted attention rollout. Outputs
-in `build/<run_label>/attention/`: `concept_attribution_<group>.csv`,
-`method_rank_correlation.json`, `figures/attention_top_concepts.png`.
+in `build/feature_importance/<run_label>/attention/`: `concept_attribution_<group>.csv`,
+`method_rank_correlation.json`; the figure is
+`build/feature_importance/<run_label>/figures/attention_top_concepts.png`.
+The fine-tuned model comes from `data/finetune_results/` and the test data from `data/predict_prepared/`.
 
 ## Step 03
 
 Combines the rankings above with source codes and descriptions (curated in the script, from RxNorm
-and standard code references). Outputs in `build/<run_label>/feature_tables/`: `lr_top10.csv`,
+and standard code references). It reads the rankings from `build/feature_importance/<run_label>/`. Outputs in
+`build/feature_importance/<run_label>/feature_tables/`: `lr_top10.csv`,
 `xgboost_top10.csv`, `attention_top10.csv`, `top_features.md`.
