@@ -9,10 +9,11 @@ partition CEHR-BERT used so the downstream comparison is apples-to-apples:
     written by cohort step 01 (``data/cohort/splits.parquet``); the step fails when it is missing
   * features frozen strictly before each patient's ``index_date``, within a fixed
     look-back window (default 365 days = ad_finetune_config observation_window)
-  * per-concept occurrence **counts** (condition / drug / procedure) + demographics
-    (age at index, one-hot gender, one-hot race)
-  * vocabulary fit on TRAIN only: concepts present in >= ``--min-prevalence`` of training
-    patients are kept, then applied unchanged to val/test (no leakage)
+  * per-concept features (condition presence/absence, drug and procedure occurrence counts)
+    + demographics (age at index, one-hot gender, one-hot race)
+  * vocabulary fit on TRAIN only: a concept is kept when it is in the qualified set shared with the
+    cohort and CEHR-BERT (``ad_cohort.qualified_concepts`` with ``omop_common.MIN_CONCEPT_PATIENTS``)
+    and occurs in at least one training patient's window; applied unchanged to val/test (no leakage)
 
 Outputs (under build/classical_ml/<window_label>/features/, window_label = w_<days> or w_all)
   {train,val,test}_X.npz        scipy CSR design matrix
@@ -23,7 +24,7 @@ Outputs (under build/classical_ml/<window_label>/features/, window_label = w_<da
 
 Usage
   python classical_ml/01_prepare_features.py
-  python classical_ml/01_prepare_features.py --window-days 365 --min-prevalence 0.01
+  python classical_ml/01_prepare_features.py --window-days 365
 """
 
 from __future__ import annotations
@@ -36,8 +37,10 @@ import polars as pl
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from pipeline import ad_cohort  # noqa: E402
 from pipeline import baselines as bl  # noqa: E402
 from pipeline import paths  # noqa: E402
+from pipeline.omop_common import MIN_CONCEPT_PATIENTS  # noqa: E402
 from pipeline.reporting import StepReport  # noqa: E402
 
 
@@ -58,7 +61,6 @@ def main(argv: list[str] | None = None) -> int:
         default=paths.DEFAULT_WINDOW_DAYS,
         help="Look-back window in days; negative => unbounded (all history)",
     )
-    parser.add_argument("--min-prevalence", type=float, default=bl.DEFAULT_MIN_PREVALENCE)
     parser.add_argument(
         "--report-dir",
         default=None,
@@ -75,7 +77,7 @@ def main(argv: list[str] | None = None) -> int:
     report.add_metric("window_label", label)
     report.add_metric("data_dir", str(data_dir))
     report.add_metric("window_days", args.window_days)
-    report.add_metric("min_prevalence", args.min_prevalence)
+    report.add_metric("min_concept_patients", MIN_CONCEPT_PATIENTS)
 
     # --- recover the shared train/val/test partition -----------------------
     try:
@@ -120,18 +122,23 @@ def main(argv: list[str] | None = None) -> int:
         for n, df in (("train", splits.train), ("val", splits.val), ("test", splits.test))
     }
 
+    qualified = ad_cohort.qualified_concepts(data_dir, MIN_CONCEPT_PATIENTS)
+    report.add_metric("qualified_concepts", qualified.len())
+
     # --- fit vocabulary on TRAIN, assemble every split ---------------------
     spec = bl.fit_feature_spec(
         counts["train"],
         demo["train"],
-        n_train=splits.train.height,
-        min_prevalence=args.min_prevalence,
+        qualified=qualified,
+        min_concept_patients=MIN_CONCEPT_PATIENTS,
         window_days=args.window_days,
         domain_encoding=bl.DOMAIN_ENCODING,
         visit_features=visit["train"],
     )
     report.add_metric("n_code_features", len(spec.code_features))
     report.add_metric("n_features_total", len(spec.feature_names))
+    for prefix, _, _, _ in bl.DOMAINS:
+        report.add_metric(f"n_{prefix}_features", sum(f.startswith(f"{prefix}:") for f in spec.code_features))
     report.add_metric("n_gender_categories", len(spec.gender_categories))
     report.add_metric("n_race_categories", len(spec.race_categories))
     report.add_metric("train_history_median", round(spec.history_median, 2))
@@ -139,7 +146,7 @@ def main(argv: list[str] | None = None) -> int:
     report.add_check(
         "at least one code feature kept",
         len(spec.code_features) > 0,
-        detail=f"{len(spec.code_features)} concepts >= {args.min_prevalence:.1%} train prevalence",
+        detail=f"{len(spec.code_features)} of {qualified.len()} qualified concepts occur in train windows",
     )
     bl.save_feature_spec(out_dir, spec)
 
