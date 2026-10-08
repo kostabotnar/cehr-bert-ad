@@ -1,8 +1,8 @@
 #!/usr/bin/env python
-"""Step 1b: Fill null *_datetime columns in the OMOP tables from the matching *_date columns.
+"""Step 02: Fill null *_datetime columns in the OMOP tables from the matching *_date columns.
 
 Some OMOP exports leave every ``*_datetime`` column null while the ``*_date`` columns are
-populated. cehrbert_data orders visits by ``visit_start_datetime``, so step 2 needs these
+populated. cehrbert_data orders visits by ``visit_start_datetime``, so cehrbert_model step 01 needs these
 filled. Null datetimes become midnight of the matching date (start from start date, end
 from end date); non-null datetimes keep their value. ``person.birth_datetime`` is built
 from year_of_birth, month_of_birth, day_of_birth, falling back to January 1 of
@@ -17,8 +17,8 @@ file and an atomic rename. The step is idempotent. It refuses to run on a path u
 ~/data/derived (the original source data).
 
 Usage:
-    python 01b_fill_datetimes.py --dry-run     # count only, write nothing
-    python 01b_fill_datetimes.py
+    python data_verification/02_fill_datetimes.py --dry-run     # count only, write nothing
+    python data_verification/02_fill_datetimes.py
 """
 
 from __future__ import annotations
@@ -27,7 +27,7 @@ import argparse
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from pipeline import fill_datetimes as fd  # noqa: E402
 from pipeline import paths  # noqa: E402
@@ -38,10 +38,10 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Fill null *_datetime columns from *_date columns")
     parser.add_argument("--data-dir", default=str(paths.OMOP_DIR))
     parser.add_argument("--dry-run", action="store_true", help="Count nulls and fillable rows; write nothing")
-    parser.add_argument("--report-dir", default=str(paths.report_dir_for("01b_fill_datetimes")))
+    parser.add_argument("--report-dir", default=str(paths.report_dir_for("data_verification", "02_fill_datetimes")))
     args = parser.parse_args(argv)
 
-    report = StepReport("01b_fill_datetimes", title="Step 1b: Fill null datetime columns")
+    report = StepReport("02_fill_datetimes", title="Step 02: Fill null datetime columns")
     data_dir = Path(args.data_dir)
     report.add_metric("data_dir", str(data_dir))
     report.add_metric("dry_run", args.dry_run)
@@ -91,7 +91,7 @@ def _finalize(report: StepReport, report_dir: str) -> int:
     report.print_summary()
     print(f"\nReport written to {report_dir}")
     if report.passed:
-        print("Next: python 02_prepare_pretraining_data.py")
+        print("Next: python cehrbert_model/01_generate_sequences.py")
     return report.exit_code()
 
 

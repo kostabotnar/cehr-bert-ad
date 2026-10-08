@@ -8,13 +8,13 @@ tokenizer_name_or_path: "data/pretrain_results"
 
 # Data paths
 # tokenized_full_dataset_path: every patient (test patients included) tokenized with the pretrained
-# tokenizer by step 5b. Pretraining itself excludes the test patients, so its prepared dataset
+# tokenizer by step 07. Pretraining itself excludes the test patients, so its prepared dataset
 # under data/pretrain_prepared cannot be used here. Its validation split is the canonical val
 # split, which extract_cohort_sequences keeps as the fine-tuning validation set.
 # This enables the extract_cohort_sequences flow which properly applies observation_window
 tokenized_full_dataset_path: "data/full_tokenized"
 data_folder: "data/cehrbert_data/patient_sequence"  # Not used when tokenized_full_dataset_path is set
-# Fine-tuning uses ONLY the fine-tuning split of the cohort (train + val; step 02b writes this folder from step 6 splits).
+# Fine-tuning uses ONLY the fine-tuning split of the cohort (train + val; step 02 writes this folder from cohort step 01 splits).
 cohort_folder: "data/cehrbert_data/cohort/finetune"
 dataset_prepared_path: "data/finetune_prepared"
 
@@ -27,7 +27,7 @@ observation_window: 365
 keep_demographic_prompt: true
 
 # Fraction of the fine-tuning cohort used for validation (the rest is training).
-# The held-out TEST set is a separate cohort created in step 6 and scored in step 9.
+# The held-out TEST set is a separate cohort created in cohort step 01 and scored in step 10.
 validation_split_percentage: 0.1
 
 # Data processing
@@ -45,7 +45,7 @@ is_data_in_meds: false
 inpatient_att_function_type: "none"
 include_auxiliary_token: true
 
-# Training settings. Prediction is a SEPARATE step (step 9) on the held-out test cohort,
+# Training settings. Prediction is a SEPARATE step (step 10) on the held-out test cohort,
 # so fine-tuning only trains and evaluates here.
 do_train: true
 do_eval: true

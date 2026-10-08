@@ -14,8 +14,8 @@ import pyarrow.parquet as pq
 
 from .reporting import StepReport
 
-# concept is required: the cohort build (step 6) and the concept-list generation
-# (step 2) both need it. The original reorganize script treated it as optional.
+# concept is required: the cohort build (cohort step 01) and the concept-list generation
+# (cehrbert_model step 01) both need it. The original reorganize script treated it as optional.
 REQUIRED_TABLES = ["person", "visit_occurrence", "condition_occurrence", "concept"]
 RECOMMENDED_TABLES = ["drug_exposure", "procedure_occurrence", "measurement"]
 
@@ -92,7 +92,9 @@ def add_dataset_checks(report: StepReport, data_dir: Path, require_concept: bool
     return report
 
 
-def _check_table(report: StepReport, data_dir: Path, table: str, level: str, presence_only_level: str | None = None) -> None:
+def _check_table(
+    report: StepReport, data_dir: Path, table: str, level: str, presence_only_level: str | None = None
+) -> None:
     """Check one table: present, readable, non-empty, has expected columns."""
     glob = table_glob(data_dir, table)
     present = glob is not None
@@ -152,7 +154,7 @@ def visit_start_datetime_all_null(glob: str) -> Optional[bool]:
 
 
 def add_visit_datetime_check(report: StepReport, data_dir: Path) -> None:
-    """Fail when visit_occurrence.visit_start_datetime is entirely null (step 02 orders visits by it)."""
+    """Fail when visit_occurrence.visit_start_datetime is entirely null (cehrbert_model step 01 orders visits by it)."""
     glob = table_glob(Path(data_dir), "visit_occurrence")
     if glob is None:
         return
@@ -162,7 +164,9 @@ def add_visit_datetime_check(report: StepReport, data_dir: Path) -> None:
     report.add_check(
         "visit_start_datetime populated",
         not all_null,
-        detail="entirely null: run 01b_fill_datetimes.py first, otherwise visits are not ordered chronologically"
-        if all_null
-        else "ok",
+        detail=(
+            "entirely null: run data_verification/02_fill_datetimes.py first, otherwise visits are not ordered chronologically"
+            if all_null
+            else "ok"
+        ),
     )

@@ -1,4 +1,4 @@
-"""Cohort construction for the labeled AD dataset (step 6).
+"""Cohort construction for the labeled AD dataset (cohort step 01).
 
 Anchor and index dates
 ----------------------
@@ -107,7 +107,7 @@ def qualified_concepts(data_dir: Path, min_concept_patients: int) -> pl.Series |
     """Standard concept ids used by at least ``min_concept_patients`` distinct persons, or None when it is 0.
 
     Mirrors ``cehrbert_data.apps.generate_included_concept_list.main`` as called by
-    ``02_generate_pretraining_data.sh`` (``--min_num_of_patients 100``, condition, procedure, drug and
+    ``cehrbert_model/01_generate_sequences.sh`` (``--min_num_of_patients 100``, condition, procedure, drug and
     measurement tables, no drug rollup): the visit-linked events of all four tables are pooled, and a
     concept qualifies when ``countDistinct(person_id) >= min_num_of_patients``. Concept 0 never counts.
     Streaming over (person, concept) pairs keeps memory bounded on the large measurement table.

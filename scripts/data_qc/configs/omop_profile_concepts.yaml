@@ -1,4 +1,4 @@
-# Concept groups for step 18 (raw OMOP profile of AD cases versus controls).
+# Concept groups for step 01 (raw OMOP profile of AD cases versus controls).
 #
 # conditions / procedures: group -> item -> {source vocabulary prefix: [code prefixes]}.
 #   A row matches when source_value starts with "<vocabulary>:<code prefix>". A token of the form

@@ -1,15 +1,15 @@
 #!/usr/bin/env python
-"""Step 5: Verify pretraining results.
+"""Step 06: Verify pretraining results.
 
-Confirms that step 4 produced a usable pretrained model and a tokenized dataset:
+Confirms that step 05 produced a usable pretrained model and a tokenized dataset:
   * data/pretrain_results/ has config.json, model weights, tokenizer, train_results.json
   * the prepared dataset the runner used (data/pretrain_prepared/<name>_<hash>, derived from
     the pretrain config) is a loadable DatasetDict with train/validation splits and person_id
-  * no person of the step 6 test split is in its train or validation split
+  * no person of the cohort step 01 test split is in its train or validation split
 
 Usage:
-    python 05_verify_pretraining.py
-    python 05_verify_pretraining.py --results-dir data/pretrain_results --prepared-dir data/pretrain_prepared/<dir>
+    python cehrbert_model/06_verify_pretraining.py
+    python cehrbert_model/06_verify_pretraining.py --results-dir data/pretrain_results --prepared-dir data/pretrain_prepared/<dir>
 """
 
 from __future__ import annotations
@@ -18,7 +18,7 @@ import argparse
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from pipeline import paths  # noqa: E402
 from pipeline import pretrain_data as pd_  # noqa: E402
@@ -37,10 +37,10 @@ def main(argv: list[str] | None = None) -> int:
         help="Prepared dataset (or a folder holding exactly one); default: the hashed folder of --config",
     )
     parser.add_argument("--splits-file", default=str(paths.COHORT_SPLITS_FILE))
-    parser.add_argument("--report-dir", default=str(paths.report_dir_for("05_verify_pretraining")))
+    parser.add_argument("--report-dir", default=str(paths.report_dir_for("cehrbert_model", "06_verify_pretraining")))
     args = parser.parse_args(argv)
 
-    report = StepReport("05_verify_pretraining", title="Step 5 — Verify pretraining results")
+    report = StepReport("06_verify_pretraining", title="Step 06 - Verify pretraining results")
     prepared_dir = args.prepared_dir or str(pd_.pretrain_prepared_path(args.config, paths.resolve_under_root))
     report.add_metric("results_dir", args.results_dir)
     report.add_metric("prepared_dir", prepared_dir)
@@ -63,7 +63,7 @@ def main(argv: list[str] | None = None) -> int:
     report.print_summary()
     print(f"\nReport written to {args.report_dir}")
     if report.passed:
-        print("Next: python 05b_tokenize_full_dataset.py")
+        print("Next: python cehrbert_model/07_tokenize_full_dataset.py")
     return report.exit_code()
 
 

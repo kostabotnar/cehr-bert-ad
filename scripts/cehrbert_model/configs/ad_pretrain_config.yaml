@@ -7,7 +7,7 @@ model_name_or_path: "data/pretrain_results"
 tokenizer_name_or_path: "data/pretrain_results"
 
 # Data paths
-# patient_sequence without the step 6 test patients (step 3b), so pretraining never sees them.
+# patient_sequence without the cohort step 01 test patients (step 03), so pretraining never sees them.
 data_folder: "data/cehrbert_data/patient_sequence_pretrain"
 dataset_prepared_path: "data/pretrain_prepared"
 

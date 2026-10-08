@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Step 1: Validate the OMOP dataset — verify all necessary files exist.
+"""Step 01: Validate the OMOP dataset - verify all necessary files exist.
 
 Checks that the OMOP source tables required by the pipeline are present, readable,
 non-empty, and expose the columns the downstream cehrbert_data tooling and cohort
@@ -11,9 +11,9 @@ the pipeline at your data (a symlink is created when possible, otherwise the pat
 validated in place).
 
 Usage:
-    python 01_validate_dataset.py                      # validate data/omop_data
-    python 01_validate_dataset.py --link /path/to/omop_data   # link then validate
-    python 01_validate_dataset.py --data-dir /path/to/omop_data  # validate elsewhere
+    python data_verification/01_validate_dataset.py                      # validate data/omop_data
+    python data_verification/01_validate_dataset.py --link /path/to/omop_data   # link then validate
+    python data_verification/01_validate_dataset.py --data-dir /path/to/omop_data  # validate elsewhere
 """
 
 from __future__ import annotations
@@ -22,7 +22,7 @@ import argparse
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from pipeline import paths  # noqa: E402
 from pipeline.omop_validation import add_dataset_checks  # noqa: E402
@@ -65,16 +65,19 @@ def link_data_folder(source: Path, target: Path, report: StepReport) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Validate the OMOP dataset")
-    parser.add_argument("--data-dir", default=str(paths.OMOP_DIR),
-                        help=f"OMOP data folder to validate (default: {paths.OMOP_DIR})")
-    parser.add_argument("--link", default=None,
-                        help="Path to your OMOP data; creates data/omop_data -> this path before validating")
-    parser.add_argument("--no-require-concept", action="store_true",
-                        help="Treat the concept table as optional (not recommended)")
-    parser.add_argument("--report-dir", default=str(paths.report_dir_for("01_validate_dataset")))
+    parser.add_argument(
+        "--data-dir", default=str(paths.OMOP_DIR), help=f"OMOP data folder to validate (default: {paths.OMOP_DIR})"
+    )
+    parser.add_argument(
+        "--link", default=None, help="Path to your OMOP data; creates data/omop_data -> this path before validating"
+    )
+    parser.add_argument(
+        "--no-require-concept", action="store_true", help="Treat the concept table as optional (not recommended)"
+    )
+    parser.add_argument("--report-dir", default=str(paths.report_dir_for("data_verification", "01_validate_dataset")))
     args = parser.parse_args(argv)
 
-    report = StepReport("01_validate_dataset", title="Step 1 — Validate OMOP dataset")
+    report = StepReport("01_validate_dataset", title="Step 01 - Validate OMOP dataset")
 
     data_dir = Path(args.data_dir)
     if args.link:
@@ -88,7 +91,7 @@ def main(argv: list[str] | None = None) -> int:
     report.print_summary()
     print(f"\nReport written to {args.report_dir}")
     if report.passed:
-        print("Next: bash 02_generate_pretraining_data.sh  (or python 02_prepare_pretraining_data.py)")
+        print("Next: bash cehrbert_model/01_generate_sequences.sh  (or python cehrbert_model/01_generate_sequences.py)")
     return report.exit_code()
 
 

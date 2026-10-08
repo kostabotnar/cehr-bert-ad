@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Step 6: Build the labeled AD cohort and the canonical train/val/test split.
+"""Step 01: Build the labeled AD cohort and the canonical train/val/test split.
 
 Reads only the OMOP tables and writes ``data/cohort/splits.parquet`` with the columns
 
@@ -28,11 +28,11 @@ like "ICD-10-CM:G30.9". condition_concept_id holds standard SNOMED ids, and the 
 table uses plain codes (vocabulary ICD10CM, concept_code "G30.9"), so neither can be
 matched against the "ICD-10-CM:" strings.
 
-The CEHR-BERT cohort folders for the finetune runner are derived from splits.parquet by step 02b.
+The CEHR-BERT cohort folders for the finetune runner are derived from splits.parquet by cehrbert_model step 02.
 
 Usage:
-    python 06_prepare_finetuning_data.py
-    python 06_prepare_finetuning_data.py --gap-days 730 --min-concept-patients 0
+    python cohort/01_build_cohort.py
+    python cohort/01_build_cohort.py --gap-days 730 --min-concept-patients 0
 """
 
 from __future__ import annotations
@@ -45,7 +45,7 @@ from pathlib import Path
 
 import polars as pl
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from pipeline import ad_cohort, paths  # noqa: E402
 from pipeline.omop_common import AD_CODE_PATTERNS, is_ad_source_value  # noqa: E402
@@ -293,10 +293,10 @@ def main(argv: list[str] | None = None) -> int:
         help="Event rule: standard concepts must be used by this many persons, as in "
         "generate_included_concept_list --min_num_of_patients (0 disables the concept part)",
     )
-    parser.add_argument("--report-dir", default=str(paths.report_dir_for("06_prepare_finetuning_data")))
+    parser.add_argument("--report-dir", default=str(paths.report_dir_for("cohort", "01_build_cohort")))
     args = parser.parse_args(argv)
 
-    report = StepReport("06_prepare_finetuning_data", title="Step 6: Prepare finetuning data (AD cohort)")
+    report = StepReport("01_build_cohort", title="Step 01: Prepare finetuning data (AD cohort)")
     data_dir = Path(args.data_dir).resolve()
     report.add_metric("data_dir", str(data_dir))
     report.add_metric("gap_days", args.gap_days)
@@ -390,7 +390,7 @@ def _finalize(report: StepReport, report_dir: str) -> int:
     report.print_summary()
     print(f"\nReport written to {report_dir}")
     if report.passed:
-        print("Next: python 02_prepare_pretraining_data.py")
+        print("Next: python cehrbert_model/01_generate_sequences.py")
     return report.exit_code()
 
 

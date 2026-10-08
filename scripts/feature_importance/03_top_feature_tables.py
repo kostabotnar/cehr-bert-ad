@@ -12,8 +12,8 @@ Outputs, under ``build/<label>/feature_tables/``:
   top_features.md   (all three tables, manuscript-ready)
 
 Usage
-  python make_top_feature_tables.py
-  python make_top_feature_tables.py --window-days -1 --ctx 4096 --top 10
+  python feature_importance/03_top_feature_tables.py
+  python feature_importance/03_top_feature_tables.py --window-days -1 --ctx 4096 --top 10
 """
 
 from __future__ import annotations
@@ -24,7 +24,7 @@ from pathlib import Path
 
 import pandas as pd
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from pipeline import paths  # noqa: E402
 

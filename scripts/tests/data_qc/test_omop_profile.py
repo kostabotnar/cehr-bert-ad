@@ -1,4 +1,4 @@
-"""Tests for pipeline/omop_profile.py and step 18 on a small synthetic OMOP dataset."""
+"""Tests for pipeline/omop_profile.py and step 01 on a small synthetic OMOP dataset."""
 
 from __future__ import annotations
 
@@ -12,6 +12,7 @@ import pytest
 
 from pipeline import omop_common as oc
 from pipeline import omop_profile as op
+from pipeline import paths
 
 D = dt.date
 
@@ -285,7 +286,7 @@ def test_range_prefix_regex():
 
 
 def test_default_config_loads():
-    cfg = op.load_concept_config(Path(__file__).resolve().parents[1] / "configs" / "omop_profile_concepts.yaml")
+    cfg = op.load_concept_config(paths.OMOP_PROFILE_CONCEPTS)
     items = op.regex_items(cfg["conditions"])
     assert "dementia_proxies__mild_cognitive_impairment" in items
     assert "comorbidities__falls" in items
@@ -520,7 +521,7 @@ def test_outcome_validity_on_fixture(profile_dir):
 # End to end
 # --------------------------------------------------------------------------
 def test_step18_end_to_end(step, profile_dir, tmp_path):
-    mod = step("18_profile_omop.py")
+    mod = step("data_qc/01_profile_omop.py")
     out = tmp_path / "out"
     rep = tmp_path / "rep"
     rc = mod.main(["--data-dir", str(profile_dir), "--out-dir", str(out), "--report-dir", str(rep), "--seed", "3"])
@@ -553,7 +554,7 @@ def test_step18_end_to_end(step, profile_dir, tmp_path):
 
 
 def test_step18_skip_sections_and_missing_tables(step, profile_dir, tmp_path):
-    mod = step("18_profile_omop.py")
+    mod = step("data_qc/01_profile_omop.py")
     out = tmp_path / "out"
     rc = mod.main(
         [

@@ -1,16 +1,16 @@
 #!/usr/bin/env python
-"""Step 4: Pretrain the CEHR-BERT model.
+"""Step 05: Pretrain the CEHR-BERT model.
 
-Preflight-checks the pretraining config (reusing step 3's validation), that its
-``data_folder`` (``patient_sequence_pretrain`` from step 3b) holds no person of the step 6 test
+Preflight-checks the pretraining config (reusing step 04's validation), that its
+``data_folder`` (``patient_sequence_pretrain`` from step 03) holds no person of the cohort step 01 test
 split, and that no prepared dataset, tokenizer, model config or checkpoint the runner would
 silently reuse is older than that input. Then launches the cehrbert pretraining runner via the
-thin ``04_pretrain.sh`` wrapper and sanity-checks that a model directory was produced. Full
-verification is step 5.
+thin ``cehrbert_model/05_pretrain.sh`` wrapper and sanity-checks that a model directory was produced. Full
+verification is step 06.
 
 Usage:
-    python 04_pretrain.py
-    python 04_pretrain.py --config configs/ad_pretrain_config.yaml
+    python cehrbert_model/05_pretrain.py
+    python cehrbert_model/05_pretrain.py --config cehrbert_model/configs/ad_pretrain_config.yaml
 """
 
 from __future__ import annotations
@@ -19,14 +19,14 @@ import argparse
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from pipeline import launch, paths  # noqa: E402
 from pipeline import pretrain_data as pd_  # noqa: E402
 from pipeline.config_validation import add_pretrain_config_checks, load_yaml, write_config  # noqa: E402
 from pipeline.reporting import StepReport  # noqa: E402
 
-WRAPPER = Path(__file__).resolve().parent / "04_pretrain.sh"
+WRAPPER = Path(__file__).resolve().parent / "05_pretrain.sh"
 
 
 def _apply_ctx_override(config: dict, max_position_embeddings: int | None) -> None:
@@ -46,30 +46,35 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Pretrain CEHR-BERT (preflight + launch)")
     parser.add_argument("--config", default=str(paths.PRETRAIN_CONFIG))
     parser.add_argument("--skip-launch", action="store_true", help="Run preflight only; do not launch training")
-    parser.add_argument("--report-dir", default=str(paths.report_dir_for("04_pretrain")))
+    parser.add_argument("--report-dir", default=str(paths.report_dir_for("cehrbert_model", "05_pretrain")))
     parser.add_argument(
         "--splits-file",
         default=str(paths.COHORT_SPLITS_FILE),
-        help="Canonical splits (step 6); its test persons must not be in the pretraining input",
+        help="Canonical splits (cohort step 01); its test persons must not be in the pretraining input",
     )
     parser.add_argument(
-        "--max-position-embeddings", "--ctx", type=int, default=None, dest="max_position_embeddings",
+        "--max-position-embeddings",
+        "--ctx",
+        type=int,
+        default=None,
+        dest="max_position_embeddings",
         help="Override the token context (max_position_embeddings / sample_packing_max_positions); "
-             "default uses the YAML value.")
+        "default uses the YAML value.",
+    )
     args = parser.parse_args(argv)
 
-    report = StepReport("04_pretrain", title="Step 4 — Pretrain CEHR-BERT")
+    report = StepReport("05_pretrain", title="Step 05 - Pretrain CEHR-BERT")
     report.add_metric("config", args.config)
 
     # --- preflight: config valid, input excludes test persons, nothing stale reused ----
     add_pretrain_config_checks(report, Path(args.config), paths.resolve_under_root)
     if not report.passed:
-        report.note("Config preflight failed; not launching training (see step 3).")
+        report.note("Config preflight failed; not launching training (see step 04).")
         return _finalize(report, args.report_dir)
 
     data_folder = paths.resolve_under_root(load_yaml(Path(args.config))["data_folder"])
     if not report.add_check("splits file exists", Path(args.splits_file).is_file(), detail=args.splits_file):
-        report.note("Run step 6, then step 3b, before pretraining.")
+        report.note("Run cohort step 01, then step 03, before pretraining.")
         return _finalize(report, args.report_dir)
     test_ids = pd_.split_person_ids(args.splits_file, "test")
     leaked = test_ids & pd_.sequence_person_ids(data_folder, require_concepts=False)
@@ -78,7 +83,7 @@ def main(argv: list[str] | None = None) -> int:
         not leaked,
         detail=f"{len(leaked)} of {len(test_ids)} test persons in {data_folder}",
     ):
-        report.note("Point data_folder at the output of step 3b (03b_build_pretraining_input.py).")
+        report.note("Point data_folder at the output of step 03 (cehrbert_model/03_build_pretraining_input.py).")
         return _finalize(report, args.report_dir)
 
     stale = pd_.stale_pretrain_artifacts(Path(args.config), paths.resolve_under_root)
@@ -111,9 +116,10 @@ def main(argv: list[str] | None = None) -> int:
         report.add_metric("launch_returncode", rc)
         if not report.add_check("pretraining process succeeded", rc == 0, detail=f"exit code {rc}"):
             return _finalize(report, args.report_dir)
-        # Cheap post-check; step 5 does the thorough verification.
-        report.add_check("model directory produced", paths.PRETRAIN_RESULTS_DIR.is_dir(),
-                         detail=str(paths.PRETRAIN_RESULTS_DIR))
+        # Cheap post-check; step 06 does the thorough verification.
+        report.add_check(
+            "model directory produced", paths.PRETRAIN_RESULTS_DIR.is_dir(), detail=str(paths.PRETRAIN_RESULTS_DIR)
+        )
 
     return _finalize(report, args.report_dir)
 
@@ -123,7 +129,7 @@ def _finalize(report: StepReport, report_dir: str) -> int:
     report.print_summary()
     print(f"\nReport written to {report_dir}")
     if report.passed:
-        print("Next: python 05_verify_pretraining.py")
+        print("Next: python cehrbert_model/06_verify_pretraining.py")
     return report.exit_code()
 
 

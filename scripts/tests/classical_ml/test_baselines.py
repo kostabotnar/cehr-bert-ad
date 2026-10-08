@@ -61,7 +61,7 @@ def test_recover_splits_rejects_duplicate_person(tmp_path):
 
 
 def test_recover_splits_requires_the_canonical_file(tmp_path):
-    with pytest.raises(FileNotFoundError, match="run step 6"):
+    with pytest.raises(FileNotFoundError, match="run cohort step 01"):
         bl.recover_splits(tmp_path / "missing.parquet")
 
 
@@ -293,7 +293,7 @@ def _random_omop(root: Path, n: int, seed: int = 0) -> list[tuple[int, int]]:
 
 @pytest.fixture(scope="module")
 def baseline_run(tmp_path_factory):
-    """Run steps 11 and 12 once on 60 synthetic patients; shared by the smoke tests."""
+    """Run steps 01 and 02 once on 60 synthetic patients; shared by the smoke tests."""
     from conftest import load_step
 
     root = tmp_path_factory.mktemp("baseline_run")
@@ -311,7 +311,7 @@ def baseline_run(tmp_path_factory):
 
     features = root / "features"
     baselines = root / "baselines"
-    rc11 = load_step("11_prepare_baseline_features.py").main(
+    rc11 = load_step("classical_ml/01_prepare_features.py").main(
         [
             "--data-dir", str(root / "omop"),
             "--splits-file", str(root / "splits.parquet"),
@@ -320,7 +320,7 @@ def baseline_run(tmp_path_factory):
             "--min-prevalence", "0.05",
         ]
     )  # fmt: skip
-    rc12 = load_step("12_train_baselines.py").main(
+    rc12 = load_step("classical_ml/02_train_baselines.py").main(
         [
             "--features-dir", str(features),
             "--output-dir", str(baselines),
@@ -362,7 +362,7 @@ def test_step12_writes_model_outputs(baseline_run):
 def test_step13_writes_comparison(baseline_run, step):
     root = baseline_run["root"]
     figures = root / "figures"
-    rc = step("13_compare_models.py").main(
+    rc = step("evaluation/02_compare_models.py").main(
         [
             "--splits-file", str(root / "splits.parquet"),
             "--baselines-dir", str(baseline_run["baselines"]),
@@ -389,7 +389,7 @@ def test_step13_writes_comparison(baseline_run, step):
 
 
 def test_step13_evaluate_command_uses_contract_arguments(step, tmp_path):
-    mod = step("13_compare_models.py")
+    mod = step("evaluation/02_compare_models.py")
     cmd = mod.evaluate_command(tmp_path / "lr")
     args = dict(zip(cmd[2::2], cmd[3::2]))
     assert args["--n-bootstrap"] == "2000"

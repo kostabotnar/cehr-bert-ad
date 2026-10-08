@@ -1,7 +1,7 @@
 #!/usr/bin/env python
-"""Step 10: Evaluate the fine-tuned AD classifier on the held-out test predictions.
+"""Step 01: Evaluate the fine-tuned AD classifier on the held-out test predictions.
 
-Consumes the prediction parquet folder written by step 9
+Consumes the prediction parquet folder written by cehrbert_model step 10
 (``data/finetune_results/test_predictions``) and computes:
 
   Discrimination : AUROC, AUPRC (vs prevalence baseline)
@@ -25,12 +25,12 @@ Outputs (all under the build/ folder)
 -------
   build/metrics.json
   build/figures/roc_curve.png, pr_curve.png, calibration_curve.png, confusion_matrix.png
-  build/reports/10_evaluate/{status.json,report.md}
+  build/reports/01_evaluate/{status.json,report.md}
 
 Usage
 -----
-  python 10_evaluate.py
-  python 10_evaluate.py --predictions data/finetune_results/test_predictions \
+  python evaluation/01_evaluate.py
+  python evaluation/01_evaluate.py --predictions data/finetune_results/test_predictions \
                         --val-predictions data/finetune_results/validation_predictions
 """
 
@@ -41,7 +41,7 @@ import json
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from pipeline import evaluation as ev  # noqa: E402
 from pipeline import paths  # noqa: E402
@@ -56,8 +56,11 @@ def _select_thresholds(report: StepReport, val_dir: Path, test_true, test_prob) 
     if val_dir.is_dir() and any(val_dir.glob("*.parquet")):
         try:
             v_true, v_prob = ev.load_predictions(val_dir)
-            report.add_check("validation predictions usable for threshold selection", len(v_true) > 0,
-                             detail=f"{len(v_true)} validation rows at {val_dir}")
+            report.add_check(
+                "validation predictions usable for threshold selection",
+                len(v_true) > 0,
+                detail=f"{len(v_true)} validation rows at {val_dir}",
+            )
             report.add_metric("threshold_selected_on", "validation")
             return {m: ev.select_threshold(v_true, v_prob, method=m) for m in methods}
         except Exception as exc:  # noqa: BLE001
@@ -66,8 +69,8 @@ def _select_thresholds(report: StepReport, val_dir: Path, test_true, test_prob) 
         "threshold selected on validation set",
         ok=False,
         detail=f"no usable validation predictions at {val_dir}; selecting on TEST set "
-               "(threshold-dependent metrics are mildly optimistic). Generate validation "
-               "predictions to remove this bias.",
+        "(threshold-dependent metrics are mildly optimistic). Generate validation "
+        "predictions to remove this bias.",
     )
     report.add_metric("threshold_selected_on", "test")
     return {m: ev.select_threshold(test_true, test_prob, method=m) for m in methods}
@@ -75,20 +78,30 @@ def _select_thresholds(report: StepReport, val_dir: Path, test_true, test_prob) 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Evaluate the fine-tuned AD classifier")
-    parser.add_argument("--predictions", default=str(paths.TEST_PREDICTIONS_DIR),
-                        help="Test predictions parquet folder")
-    parser.add_argument("--val-predictions", default=str(paths.VAL_PREDICTIONS_DIR),
-                        help="Validation predictions folder for unbiased threshold selection")
-    parser.add_argument("--window-days", type=int, default=paths.DEFAULT_WINDOW_DAYS,
-                        help="Look-back window in days for the run label (negative = all history).")
-    parser.add_argument("--ctx", type=int, default=paths.DEFAULT_CTX,
-                        help="Token context for the run label.")
-    parser.add_argument("--results-dir", default=None,
-                        help="Override results dir; defaults to build/<run_label>/ (metrics.json).")
-    parser.add_argument("--figures-dir", default=None,
-                        help="Override figures dir; defaults to build/<run_label>/figures.")
-    parser.add_argument("--report-dir", default=None,
-                        help="Override report dir; defaults to build/<run_label>/reports/10_evaluate.")
+    parser.add_argument(
+        "--predictions", default=str(paths.TEST_PREDICTIONS_DIR), help="Test predictions parquet folder"
+    )
+    parser.add_argument(
+        "--val-predictions",
+        default=str(paths.VAL_PREDICTIONS_DIR),
+        help="Validation predictions folder for unbiased threshold selection",
+    )
+    parser.add_argument(
+        "--window-days",
+        type=int,
+        default=paths.DEFAULT_WINDOW_DAYS,
+        help="Look-back window in days for the run label (negative = all history).",
+    )
+    parser.add_argument("--ctx", type=int, default=paths.DEFAULT_CTX, help="Token context for the run label.")
+    parser.add_argument(
+        "--results-dir", default=None, help="Override results dir; defaults to build/<run_label>/ (metrics.json)."
+    )
+    parser.add_argument(
+        "--figures-dir", default=None, help="Override figures dir; defaults to build/<run_label>/figures."
+    )
+    parser.add_argument(
+        "--report-dir", default=None, help="Override report dir; defaults to build/<run_label>/reports/01_evaluate."
+    )
     parser.add_argument("--n-bootstrap", type=int, default=2000)
     parser.add_argument("--cal-bins", type=int, default=10)
     parser.add_argument("--seed", type=int, default=42)
@@ -98,32 +111,41 @@ def main(argv: list[str] | None = None) -> int:
     label = paths.run_label(args.window_days, args.ctx)
     results_dir = Path(args.results_dir) if args.results_dir else paths.eval_results_dir(label)
     figures_dir = Path(args.figures_dir) if args.figures_dir else paths.figures_dir(label)
-    report_dir = Path(args.report_dir) if args.report_dir else paths.build_report_dir_for("10_evaluate", label)
+    report_dir = Path(args.report_dir) if args.report_dir else paths.build_report_dir_for("01_evaluate", label)
 
-    report = StepReport("10_evaluate", title="Step 10 - Evaluate fine-tuned AD classifier")
+    report = StepReport("01_evaluate", title="Step 01 - Evaluate fine-tuned AD classifier")
     report.add_metric("run_label", label)
     pred_dir = Path(args.predictions)
     report.add_metric("predictions_dir", str(pred_dir))
 
-    if not report.add_check("test predictions exist", pred_dir.is_dir() and any(pred_dir.glob("*.parquet")),
-                            detail=str(pred_dir)):
+    if not report.add_check(
+        "test predictions exist", pred_dir.is_dir() and any(pred_dir.glob("*.parquet")), detail=str(pred_dir)
+    ):
         return _finalize(report, report_dir)
 
     y_true, y_prob = ev.load_predictions(pred_dir)
     report.add_metric("n_test", int(len(y_true)))
     report.add_metric("n_positive", int(y_true.sum()))
-    if not report.add_check("test set has both classes", 0 < y_true.sum() < len(y_true),
-                            detail=f"{int(y_true.sum())} positive of {len(y_true)}"):
+    if not report.add_check(
+        "test set has both classes",
+        0 < y_true.sum() < len(y_true),
+        detail=f"{int(y_true.sum())} positive of {len(y_true)}",
+    ):
         return _finalize(report, report_dir)
 
     # --- discrimination (with CIs) ----------------------------------------
     disc = ev.discrimination_metrics(y_true, y_prob)
     auroc_pt, auroc_lo, auroc_hi = ev.bootstrap_ci(
-        y_true, y_prob, lambda t, p: ev.roc_auc_score(t, p), args.n_bootstrap, args.seed)
+        y_true, y_prob, lambda t, p: ev.roc_auc_score(t, p), args.n_bootstrap, args.seed
+    )
     auprc_pt, auprc_lo, auprc_hi = ev.bootstrap_ci(
-        y_true, y_prob, lambda t, p: ev.average_precision_score(t, p), args.n_bootstrap, args.seed)
-    report.add_check("AUROC in [0, 1]", 0.0 <= disc["auroc"] <= 1.0,
-                     detail=f"AUROC={disc['auroc']:.4f} [{auroc_lo:.4f}, {auroc_hi:.4f}]")
+        y_true, y_prob, lambda t, p: ev.average_precision_score(t, p), args.n_bootstrap, args.seed
+    )
+    report.add_check(
+        "AUROC in [0, 1]",
+        0.0 <= disc["auroc"] <= 1.0,
+        detail=f"AUROC={disc['auroc']:.4f} [{auroc_lo:.4f}, {auroc_hi:.4f}]",
+    )
     report.add_metric("auroc", round(disc["auroc"], 4))
     report.add_metric("auroc_ci95", [round(auroc_lo, 4), round(auroc_hi, 4)])
     report.add_metric("auprc", round(disc["auprc"], 4))
@@ -139,9 +161,12 @@ def main(argv: list[str] | None = None) -> int:
     operating_cis: dict[str, list[float]] = {}
     for key in ("sensitivity", "specificity", "ppv"):
         pt, lo, hi = ev.bootstrap_ci(
-            y_true, y_prob,
+            y_true,
+            y_prob,
             (lambda k: lambda t, p: ev.threshold_metrics(t, p, thresholds[PRIMARY_METHOD])[k])(key),
-            args.n_bootstrap, args.seed)
+            args.n_bootstrap,
+            args.seed,
+        )
         report.add_metric(f"{key}@{PRIMARY_METHOD}", round(pt, 4))
         report.add_metric(f"{key}@{PRIMARY_METHOD}_ci95", [round(lo, 4), round(hi, 4)])
         operating_cis[f"{key}_ci95"] = [lo, hi]
@@ -149,18 +174,28 @@ def main(argv: list[str] | None = None) -> int:
     # --- calibration -------------------------------------------------------
     cal = ev.calibration_metrics(y_true, y_prob, n_bins=args.cal_bins)
     brier_pt, brier_lo, brier_hi = ev.bootstrap_ci(
-        y_true, y_prob, lambda t, p: ev.brier_score_loss(t, p), args.n_bootstrap, args.seed)
+        y_true, y_prob, lambda t, p: ev.brier_score_loss(t, p), args.n_bootstrap, args.seed
+    )
     _, ece_lo, ece_hi = ev.bootstrap_ci(
-        y_true, y_prob, lambda t, p: ev.calibration_metrics(t, p, n_bins=args.cal_bins).ece, args.n_bootstrap, args.seed)
+        y_true, y_prob, lambda t, p: ev.calibration_metrics(t, p, n_bins=args.cal_bins).ece, args.n_bootstrap, args.seed
+    )
     _, slope_lo, slope_hi = ev.bootstrap_ci(
-        y_true, y_prob, lambda t, p: ev.calibration_metrics(t, p, n_bins=args.cal_bins).slope, args.n_bootstrap, args.seed)
+        y_true,
+        y_prob,
+        lambda t, p: ev.calibration_metrics(t, p, n_bins=args.cal_bins).slope,
+        args.n_bootstrap,
+        args.seed,
+    )
     report.add_metric("brier", round(cal.brier, 4))
     report.add_metric("brier_ci95", [round(brier_lo, 4), round(brier_hi, 4)])
     report.add_metric("ece", round(cal.ece, 4))
     report.add_metric("calibration_slope", round(cal.slope, 4))
     report.add_metric("calibration_intercept", round(cal.intercept, 4))
-    report.warn("calibration slope near 1.0", ok=(0.7 <= cal.slope <= 1.3) if cal.slope == cal.slope else False,
-                detail=f"slope={cal.slope:.3f} (1.0 = perfect; <1 overconfident)")
+    report.warn(
+        "calibration slope near 1.0",
+        ok=(0.7 <= cal.slope <= 1.3) if cal.slope == cal.slope else False,
+        detail=f"slope={cal.slope:.3f} (1.0 = perfect; <1 overconfident)",
+    )
 
     # --- figures -----------------------------------------------------------
     fig_dir = figures_dir
@@ -177,8 +212,10 @@ def main(argv: list[str] | None = None) -> int:
         "n_test": int(len(y_true)),
         "n_positive": int(y_true.sum()),
         "discrimination": {
-            "auroc": disc["auroc"], "auroc_ci95": [auroc_lo, auroc_hi],
-            "auprc": disc["auprc"], "auprc_ci95": [auprc_lo, auprc_hi],
+            "auroc": disc["auroc"],
+            "auroc_ci95": [auroc_lo, auroc_hi],
+            "auprc": disc["auprc"],
+            "auprc_ci95": [auprc_lo, auprc_hi],
             "prevalence": disc["prevalence"],
         },
         "threshold_selected_on": report.metrics.get("threshold_selected_on"),
@@ -187,9 +224,13 @@ def main(argv: list[str] | None = None) -> int:
             PRIMARY_METHOD: {**operating[PRIMARY_METHOD], **operating_cis},
         },
         "calibration": {
-            "brier": cal.brier, "brier_ci95": [brier_lo, brier_hi],
-            "ece": cal.ece, "ece_ci95": [ece_lo, ece_hi],
-            "slope": cal.slope, "slope_ci95": [slope_lo, slope_hi], "intercept": cal.intercept,
+            "brier": cal.brier,
+            "brier_ci95": [brier_lo, brier_hi],
+            "ece": cal.ece,
+            "ece_ci95": [ece_lo, ece_hi],
+            "slope": cal.slope,
+            "slope_ci95": [slope_lo, slope_hi],
+            "intercept": cal.intercept,
             "reliability_curve": {
                 "mean_predicted": cal.bin_centers,
                 "observed_rate": cal.bin_true,

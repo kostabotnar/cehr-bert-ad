@@ -1,20 +1,20 @@
 #!/usr/bin/env python
-"""Step 10a: Per-sample predictions on the fine-tuning VALIDATION split.
+"""Step 11: Per-sample predictions on the fine-tuning VALIDATION split.
 
 This step scores the *validation* split that the fine-tuning runner created internally
-(train/validation split of ``data/cehrbert_data/cohort/finetune``), using the model fine-tuned in step 8.
-Downstream evaluation (step 10) uses these per-sample validation probabilities to select
+(train/validation split of ``data/cehrbert_data/cohort/finetune``), using the model fine-tuned in step 09.
+Downstream evaluation (evaluation step 01) uses these per-sample validation probabilities to select
 an UNBIASED operating threshold -- one chosen on data the model was tuned/early-stopped on
 but never scored at the patient level, and crucially NOT on the held-out test set. Picking a
 threshold on the test set and then reporting test metrics at that same threshold would be
 optimistically biased; this step exists to avoid exactly that leakage.
 
 Why we KEEP ``cohort_folder`` and ``dataset_prepared_path`` from the fine-tuning config
-(rather than pointing at the test cohort like step 9 does):
+(rather than pointing at the test cohort like step 10 does):
     ``generate_prepared_ds_path`` hashes (data_folder/cohort_folder + tokenizer path +
     validation_split_percentage + test_eval_ratio + split_by_patient + chronological_split)
     to derive ``dataset_prepared_path/<hash>``. By reproducing those exact inputs, the hash
-    resolves to the SAME ``data/finetune_prepared/<hash>`` directory that step 8 already
+    resolves to the SAME ``data/finetune_prepared/<hash>`` directory that step 09 already
     populated -- the one that physically contains the ``train`` and ``validation`` splits.
     We then load that DatasetDict and score its ``validation`` split. We do NOT regenerate
     any data and we do NOT touch the test cohort or ``predict_prepared``.
@@ -37,10 +37,10 @@ itself (no bash wrapper / subprocess). It MUST run in the environment that has t
 transformers, and the ``cehrbert`` package installed.
 
 Usage:
-    python scripts/ad_pipeline/10a_validation_predictions.py
-    python scripts/ad_pipeline/10a_validation_predictions.py --finetune-config configs/ad_finetune_config.yaml
+    python cehrbert_model/11_validation_predictions.py
+    python cehrbert_model/11_validation_predictions.py --finetune-config cehrbert_model/configs/ad_finetune_config.yaml
 
-After this completes, re-run ``python scripts/ad_pipeline/10_evaluate.py`` to pick up the
+After this completes, re-run ``python evaluation/01_evaluate.py`` to pick up the
 validation threshold automatically.
 """
 
@@ -53,7 +53,7 @@ from datetime import datetime
 from functools import partial
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from pipeline import paths  # noqa: E402
 from pipeline.config_validation import load_yaml, write_config  # noqa: E402
@@ -64,7 +64,7 @@ from pipeline.predictions_checks import _read_json  # noqa: E402
 def build_validation_predict_config(finetune_cfg: dict) -> dict:
     """Derive a predict-only runner config that reuses the existing fine-tuning prepared dataset.
 
-    Unlike step 9, ``cohort_folder`` and ``dataset_prepared_path`` are KEPT exactly as in the
+    Unlike step 10, ``cohort_folder`` and ``dataset_prepared_path`` are KEPT exactly as in the
     fine-tuning config so ``generate_prepared_ds_path`` hashes to the same prepared directory
     (``data/finetune_prepared/<hash>``) that already holds the train+validation splits. Only the
     model/output dirs are repointed at the fine-tuned model; the tokenizer path is left as the
@@ -376,7 +376,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--report-dir",
         default=None,
-        help="Override report dir; defaults to build/<run_label>/reports/10a_validation_predictions.",
+        help="Override report dir; defaults to build/<run_label>/reports/11_validation_predictions.",
     )
     args = parser.parse_args(argv)
 
@@ -384,12 +384,12 @@ def main(argv: list[str] | None = None) -> int:
     # (validation_predictions themselves stay under data/finetune_results -- unchanged.)
     label = paths.run_label(args.window_days, args.ctx)
     report_dir = (
-        Path(args.report_dir) if args.report_dir else paths.build_report_dir_for("10a_validation_predictions", label)
+        Path(args.report_dir) if args.report_dir else paths.build_report_dir_for("11_validation_predictions", label)
     )
 
     report = StepReport(
-        "10a_validation_predictions",
-        title="Step 10a - Validation-split predictions for unbiased thresholding",
+        "11_validation_predictions",
+        title="Step 11 - Validation-split predictions for unbiased thresholding",
     )
     report.add_metric("run_label", label)
     report.add_metric("finetune_config", args.finetune_config)
@@ -421,7 +421,7 @@ def main(argv: list[str] | None = None) -> int:
 
     # 4. Preflight checks.
     if not _preflight(report, prepared_ds_path, model_args, training_args):
-        report.note("Preflight failed; not running validation prediction. Run step 8 (fine-tuning) first.")
+        report.note("Preflight failed; not running validation prediction. Run step 09 (fine-tuning) first.")
         return _finalize(report, report_dir)
 
     # 5-7. Run the inference loop (mirrors do_predict) and write outputs.
@@ -447,7 +447,7 @@ def _finalize(report: StepReport, report_dir: str) -> int:
     print(f"\nReport written to {report_dir}")
     if report.passed:
         print("Validation predictions in data/finetune_results/validation_predictions/")
-        print("Next: re-run `python scripts/ad_pipeline/10_evaluate.py` to pick up the validation threshold.")
+        print("Next: re-run `python evaluation/01_evaluate.py` to pick up the validation threshold.")
     return report.exit_code()
 
 

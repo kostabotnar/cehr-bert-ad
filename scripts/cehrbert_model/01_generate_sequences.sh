@@ -1,10 +1,10 @@
 #!/bin/bash
-# Step 2 (launcher): Generate CEHR-BERT pretraining sequences from OMOP tables.
+# Step 01 (launcher): Generate CEHR-BERT pretraining sequences from OMOP tables.
 #
 # Thin wrapper: sets Spark environment and invokes cehrbert_data. Preflight validation
-# and result reporting live in 02_prepare_pretraining_data.py — prefer running that:
+# and result reporting live in cehrbert_model/01_generate_sequences.py - prefer running that:
 #
-#     python 02_prepare_pretraining_data.py
+#     python cehrbert_model/01_generate_sequences.py
 #
 # Running this script directly is supported for debugging the Spark step in isolation.
 
@@ -13,7 +13,7 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
-# INPUT_FOLDER is the staging folder of symlinks to the OMOP tables (see 02_prepare_pretraining_data.py): cehrbert_data
+# INPUT_FOLDER is the staging folder of symlinks to the OMOP tables (see cehrbert_model/01_generate_sequences.py): cehrbert_data
 # writes processed_measurement and reads qualified_concept_list inside it, so it must never be the OMOP folder.
 INPUT_FOLDER="${INPUT_FOLDER:-${PROJECT_ROOT}/data/cehrbert_data/omop_input}"
 OUTPUT_FOLDER="${OUTPUT_FOLDER:-${PROJECT_ROOT}/data/cehrbert_data}"

@@ -1,7 +1,7 @@
 #!/usr/bin/env python
-"""Step 18: Profile the raw OMOP data split into AD cases and controls.
+"""Step 01: Profile the raw OMOP data split into AD cases and controls.
 
-Reads the OMOP tables directly (nothing from step 6 or later) and describes AD cases and controls
+Reads the OMOP tables directly (nothing from cohort step 01 or later) and describes AD cases and controls
 under three index views: ``ad`` (first AD diagnosis), ``control_last_visit`` (last visit) and
 ``control_matched_index`` (a visit date of the control chosen so its age band and calendar year
 distribution follows the cases, see ``pipeline/omop_profile.py``). The goal is to choose cohort
@@ -13,11 +13,11 @@ Outputs (under build/omop_profile/ by default)
   table1.csv / .md     one row per variable level, SMD of each control view versus AD
   exclusion_flow.csv   sequential candidate exclusions (reported only)
   figures/*.png        case/control overlays (300 dpi)
-  reports/18_profile_omop/{status.json,report.md}
+  reports/01_profile_omop/{status.json,report.md}
 
 Usage
-  python 18_profile_omop.py
-  python 18_profile_omop.py --person-sample-fraction 0.02 --skip-sections measurement,duplicates
+  python data_qc/01_profile_omop.py
+  python data_qc/01_profile_omop.py --person-sample-fraction 0.02 --skip-sections measurement,duplicates
 """
 
 from __future__ import annotations
@@ -36,14 +36,14 @@ import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
 import polars as pl  # noqa: E402
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from pipeline import omop_profile as op  # noqa: E402
 from pipeline import paths  # noqa: E402
 from pipeline.omop_validation import table_glob  # noqa: E402
 from pipeline.reporting import StepReport  # noqa: E402
 
-STEP = "18_profile_omop"
+STEP = "01_profile_omop"
 SECTIONS = (
     "data_quality",
     "demographics",
@@ -227,7 +227,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--data-dir", default=str(paths.OMOP_DIR))
     parser.add_argument("--out-dir", default=str(paths.OMOP_PROFILE_DIR))
     parser.add_argument("--report-dir", default=None)
-    parser.add_argument("--concepts", default=str(paths.CONFIG_DIR / "omop_profile_concepts.yaml"))
+    parser.add_argument("--concepts", default=str(paths.OMOP_PROFILE_CONCEPTS))
     parser.add_argument("--date-floor", default=op.DEFAULT_DATE_FLOOR)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--person-sample-fraction", type=float, default=1.0)
@@ -247,7 +247,7 @@ def main(argv: list[str] | None = None) -> int:
     if unknown:
         parser.error(f"unknown --skip-sections: {sorted(unknown)}")
 
-    report = StepReport(STEP, title="Step 18 - Raw OMOP profile of AD cases versus controls")
+    report = StepReport(STEP, title="Step 01 - Raw OMOP profile of AD cases versus controls")
     report.add_metric("person_sample_fraction", args.person_sample_fraction)
     report.add_metric("seed", args.seed)
 

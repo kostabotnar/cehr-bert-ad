@@ -1,8 +1,8 @@
 #!/usr/bin/env python
-"""Step 9: Predict on the held-out test cohort and verify the results.
+"""Step 10: Predict on the held-out test cohort and verify the results.
 
-Runs prediction as a standalone step on the test cohort that step 6 held out
-(``data/cehrbert_data/cohort/test``), using the model fine-tuned in step 8. A predict config is derived
+Runs prediction as a standalone step on the test cohort that cohort step 01 held out
+(``data/cehrbert_data/cohort/test``), using the model fine-tuned in step 09. A predict config is derived
 from the fine-tuning config with these overrides:
 
     cohort_folder        -> the held-out test cohort
@@ -16,8 +16,8 @@ cohort as the ``test`` split (see the vendored runner edit), writes
 then verifies those outputs (columns, probability range, ROC-AUC / PR-AUC).
 
 Usage:
-    python 09_predict.py
-    python 09_predict.py --finetune-config configs/ad_finetune_config.yaml
+    python cehrbert_model/10_predict.py
+    python cehrbert_model/10_predict.py --finetune-config cehrbert_model/configs/ad_finetune_config.yaml
 """
 
 from __future__ import annotations
@@ -26,14 +26,14 @@ import argparse
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from pipeline import launch, paths  # noqa: E402
 from pipeline.config_validation import load_yaml, write_config  # noqa: E402
 from pipeline.predictions_checks import add_predictions_checks, add_test_results_checks  # noqa: E402
 from pipeline.reporting import StepReport  # noqa: E402
 
-WRAPPER = Path(__file__).resolve().parent / "09_predict.sh"
+WRAPPER = Path(__file__).resolve().parent / "10_predict.sh"
 
 ALL_HISTORY_DAYS = 36500  # sentinel look-back used when a negative window is requested
 
@@ -108,7 +108,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--skip-launch", action="store_true", help="Verify existing predictions only; do not run inference"
     )
-    parser.add_argument("--report-dir", default=str(paths.report_dir_for("09_predict")))
+    parser.add_argument("--report-dir", default=str(paths.report_dir_for("cehrbert_model", "10_predict")))
     parser.add_argument(
         "--max-position-embeddings",
         "--ctx",
@@ -128,7 +128,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
-    report = StepReport("09_predict", title="Step 9 — Predict on held-out test & verify")
+    report = StepReport("10_predict", title="Step 10 - Predict on held-out test & verify")
     report.add_metric("finetune_config", args.finetune_config)
 
     finetune_cfg = load_yaml(Path(args.finetune_config))
@@ -139,7 +139,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if not args.skip_launch:
         if not _preflight(report, predict_cfg):
-            report.note("Preflight failed; not running prediction. Run steps 6 and 8 first.")
+            report.note("Preflight failed; not running prediction. Run cohort step 01 and step 09 first.")
             return _finalize(report, args.report_dir)
         Path(paths.PREDICT_PREPARED_DIR).mkdir(parents=True, exist_ok=True)
 

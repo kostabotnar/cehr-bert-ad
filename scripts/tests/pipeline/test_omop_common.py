@@ -1,4 +1,4 @@
-"""Tests for pipeline/omop_common.py (helpers shared by step 6 and step 18)."""
+"""Tests for pipeline/omop_common.py (helpers shared by cohort step 01 and data_qc step 01)."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from pathlib import Path
 import polars as pl
 import pytest
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from pipeline import omop_common as oc  # noqa: E402
 

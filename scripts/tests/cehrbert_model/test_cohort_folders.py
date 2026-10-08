@@ -1,4 +1,4 @@
-"""Tests for step 02b: the CEHR-BERT cohort folders derived from splits.parquet."""
+"""Tests for step 02: the CEHR-BERT cohort folders derived from splits.parquet."""
 
 from __future__ import annotations
 
@@ -28,7 +28,7 @@ def _splits(tmp_path: Path, persons=PERSONS) -> Path:
 
 
 def _run(step, tmp_path, splits, seq):
-    mod = step("02b_prepare_cohort_folders.py")
+    mod = step("cehrbert_model/02_prepare_cohort_folders.py")
     rep = tmp_path / "rep"
     rc = mod.main(
         [

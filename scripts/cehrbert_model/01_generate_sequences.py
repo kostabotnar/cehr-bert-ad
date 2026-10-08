@@ -1,8 +1,8 @@
 #!/usr/bin/env python
-"""Step 2: Prepare data for pretraining — generate CEHR-BERT patient sequences.
+"""Step 01: Prepare data for pretraining - generate CEHR-BERT patient sequences.
 
 Preflight-validates the OMOP tables the Spark job needs, stages them as symlinks in
-``data/cehrbert_data/omop_input``, then invokes the thin ``02_generate_pretraining_data.sh``
+``data/cehrbert_data/omop_input``, then invokes the thin ``cehrbert_model/01_generate_sequences.sh``
 wrapper (cehrbert_data Spark apps) on that folder, and finally verifies that the
 patient_sequence output was produced. cehrbert_data writes ``processed_measurement`` and
 reads ``qualified_concept_list`` inside its input folder, so the OMOP folder is never passed to
@@ -10,8 +10,8 @@ it and nothing is written there. All validation/reporting is here; the bash wrap
 Spark env and launches the apps.
 
 Usage:
-    python 02_prepare_pretraining_data.py
-    python 02_prepare_pretraining_data.py --spark-driver-memory 24g
+    python cehrbert_model/01_generate_sequences.py
+    python cehrbert_model/01_generate_sequences.py --spark-driver-memory 24g
 """
 
 from __future__ import annotations
@@ -20,7 +20,7 @@ import argparse
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from pipeline import launch, paths  # noqa: E402
 from pipeline import pretrain_data as pd_  # noqa: E402
@@ -32,7 +32,7 @@ from pipeline.omop_validation import (  # noqa: E402
 )
 from pipeline.reporting import StepReport  # noqa: E402
 
-WRAPPER = Path(__file__).resolve().parent / "02_generate_pretraining_data.sh"
+WRAPPER = Path(__file__).resolve().parent / "01_generate_sequences.sh"
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -50,10 +50,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--skip-launch", action="store_true", help="Run preflight + verification only; do not launch the Spark job"
     )
-    parser.add_argument("--report-dir", default=str(paths.report_dir_for("02_prepare_pretraining_data")))
+    parser.add_argument("--report-dir", default=str(paths.report_dir_for("cehrbert_model", "01_generate_sequences")))
     args = parser.parse_args(argv)
 
-    report = StepReport("02_prepare_pretraining_data", title="Step 2 — Prepare pretraining data")
+    report = StepReport("01_generate_sequences", title="Step 01 - Prepare pretraining data")
     input_folder = Path(args.input_folder)
     output_folder = Path(args.output_folder)
     report.add_metric("input_folder", str(input_folder))
@@ -63,7 +63,9 @@ def main(argv: list[str] | None = None) -> int:
     add_dataset_checks(report, input_folder, require_concept=True)
     add_visit_datetime_check(report, input_folder)
     if not report.passed:
-        report.note("Preflight failed; not launching Spark job. Fix dataset issues (see steps 1 and 1b).")
+        report.note(
+            "Preflight failed; not launching Spark job. Fix dataset issues (see data_verification steps 01 and 02)."
+        )
         return _finalize(report, args.report_dir)
 
     # --- stage the OMOP tables as cehrbert_data's input folder ----------------
@@ -115,7 +117,7 @@ def _finalize(report: StepReport, report_dir: str) -> int:
     report.print_summary()
     print(f"\nReport written to {report_dir}")
     if report.passed:
-        print("Next: python 03_evaluate_pretrain_config.py")
+        print("Next: python cehrbert_model/04_validate_pretrain_config.py")
     return report.exit_code()
 
 

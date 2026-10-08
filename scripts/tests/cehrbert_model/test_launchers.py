@@ -32,9 +32,9 @@ def _status(report_dir):
     return json.loads((report_dir / "status.json").read_text(encoding="utf-8"))["status"]
 
 
-# --- step 02 ---------------------------------------------------------------
+# --- step 01 ---------------------------------------------------------------
 def test_step02_launch_success(step, omop_dir, tmp_path, monkeypatch):
-    mod = step("02_prepare_pretraining_data.py")
+    mod = step("cehrbert_model/01_generate_sequences.py")
     out_folder = tmp_path / "cehrbert_data"
     staging = out_folder / "omop_input"
     omop_before = sorted(p.name for p in omop_dir.iterdir())
@@ -73,7 +73,7 @@ def test_step02_launch_success(step, omop_dir, tmp_path, monkeypatch):
 
 
 def test_step02_preflight_gate_blocks_launch(step, tmp_path, monkeypatch):
-    mod = step("02_prepare_pretraining_data.py")
+    mod = step("cehrbert_model/01_generate_sequences.py")
     rec = CallRecorder(returncode=0)
     monkeypatch.setattr(mod.launch, "run_command", rec)
 
@@ -98,7 +98,7 @@ def test_step02_preflight_gate_blocks_launch(step, tmp_path, monkeypatch):
     assert not (tmp_path / "stage").exists()
 
 
-# --- step 04 ---------------------------------------------------------------
+# --- step 05 ---------------------------------------------------------------
 def _splits(tmp_path, test_ids=(7,)):
     import polars as pl
 
@@ -109,7 +109,7 @@ def _splits(tmp_path, test_ids=(7,)):
 
 
 def test_step04_launch_success(step, pretrain_config, tmp_path, monkeypatch):
-    mod = step("04_pretrain.py")
+    mod = step("cehrbert_model/05_pretrain.py")
     monkeypatch.setattr(mod.paths, "PRETRAIN_PREPARED_DIR", tmp_path / "pp")
     monkeypatch.setattr(mod.paths, "PRETRAIN_RESULTS_DIR", tmp_path / "pr")
     rec = CallRecorder(returncode=0)
@@ -122,7 +122,7 @@ def test_step04_launch_success(step, pretrain_config, tmp_path, monkeypatch):
 
 
 def test_step04_missing_sequences_gates_launch(step, pretrain_config, tmp_path, monkeypatch):
-    mod = step("04_pretrain.py")
+    mod = step("cehrbert_model/05_pretrain.py")
     cfg = yaml.safe_load(pretrain_config.read_text(encoding="utf-8"))
     cfg["data_folder"] = str(tmp_path / "no_sequences")
     pretrain_config.write_text(yaml.safe_dump(cfg), encoding="utf-8")
@@ -136,7 +136,7 @@ def test_step04_missing_sequences_gates_launch(step, pretrain_config, tmp_path, 
 
 
 def test_step04_missing_splits_gates_launch(step, pretrain_config, tmp_path, monkeypatch):
-    mod = step("04_pretrain.py")
+    mod = step("cehrbert_model/05_pretrain.py")
     rec = CallRecorder(returncode=0)
     monkeypatch.setattr(mod.launch, "run_command", rec)
 
@@ -151,9 +151,9 @@ def test_step04_missing_splits_gates_launch(step, pretrain_config, tmp_path, mon
     assert rec.calls == []
 
 
-# --- step 08 ---------------------------------------------------------------
+# --- step 09 ---------------------------------------------------------------
 def test_step08_launch_success(step, finetune_config, tmp_path, monkeypatch):
-    mod = step("08_finetune.py")
+    mod = step("cehrbert_model/09_finetune.py")
     monkeypatch.setattr(mod.paths, "FINETUNE_PREPARED_DIR", tmp_path / "fp")
     monkeypatch.setattr(mod.paths, "FINETUNE_RESULTS_DIR", tmp_path / "fr")
     rec = CallRecorder(returncode=0)
@@ -166,7 +166,7 @@ def test_step08_launch_success(step, finetune_config, tmp_path, monkeypatch):
 
 
 def test_step08_preflight_gate_blocks_launch(step, tmp_path, monkeypatch):
-    mod = step("08_finetune.py")
+    mod = step("cehrbert_model/09_finetune.py")
     rec = CallRecorder(returncode=0)
     monkeypatch.setattr(mod.launch, "run_command", rec)
 
@@ -188,9 +188,9 @@ def test_step08_preflight_gate_blocks_launch(step, tmp_path, monkeypatch):
     assert rec.calls == []
 
 
-# --- step 09 (predict + verify) -------------------------------------------
+# --- step 10 (predict + verify) -------------------------------------------
 def test_step09_predict_then_verify_success(step, finetune_config, finetune_results_dir, tmp_path, monkeypatch):
-    mod = step("09_predict.py")
+    mod = step("cehrbert_model/10_predict.py")
     # Point pipeline outputs at fixtures; cohort_test + finetuned model must exist for preflight.
     cohort_test = tmp_path / "cohort" / "test"
     cohort_test.mkdir(parents=True)
@@ -218,7 +218,7 @@ def test_step09_predict_then_verify_success(step, finetune_config, finetune_resu
 
 
 def test_step09_preflight_gate_blocks_launch(step, finetune_config, tmp_path, monkeypatch):
-    mod = step("09_predict.py")
+    mod = step("cehrbert_model/10_predict.py")
     monkeypatch.setattr(mod.paths, "CEHRBERT_COHORT_TEST_DIR", tmp_path / "no_cohort")
     monkeypatch.setattr(mod.paths, "FINETUNE_RESULTS_DIR", tmp_path / "no_model")
     rec = CallRecorder(returncode=0)

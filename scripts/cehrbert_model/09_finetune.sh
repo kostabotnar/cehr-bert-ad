@@ -1,11 +1,11 @@
 #!/bin/bash
-# Step 8 (launcher): Fine-tune CEHR-BERT for Alzheimer's Disease prediction.
+# Step 09 (launcher): Fine-tune CEHR-BERT for Alzheimer's Disease prediction.
 #
 # Thin wrapper: invokes the cehrbert finetuning runner with the given config from the
 # project root. Preflight validation, the test-split fix, and result reporting live in
-# 08_finetune.py — prefer running that:
+# cehrbert_model/09_finetune.py - prefer running that:
 #
-#     python 08_finetune.py
+#     python cehrbert_model/09_finetune.py
 #
 # Args:
 #   $1 (optional) path to the finetuning config yaml.

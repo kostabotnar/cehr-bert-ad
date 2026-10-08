@@ -1,4 +1,4 @@
-"""Tests for the frozen CEHR-BERT linear probe (steps 15 and 16, pipeline/linear_probe.py).
+"""Tests for the frozen CEHR-BERT linear probe (steps 13 and 14, pipeline/linear_probe.py).
 
 Everything runs on CPU with a tiny randomly initialized CehrBertForPreTraining (hidden size 16,
 one layer) and synthetic data.
@@ -294,7 +294,7 @@ def test_load_frozen_model_uses_sdpa_and_eval(tmp_path):
 
 
 # --------------------------------------------------------------------------
-# Step 15 end to end on a synthetic tokenized dataset
+# Step 13 end to end on a synthetic tokenized dataset
 # --------------------------------------------------------------------------
 # Days before the index date of the synthetic events (0 = on the index date).
 EVENT_OFFSET_DAYS = [0, 1, 50, 365, 366, 500]
@@ -367,7 +367,7 @@ def test_window_excludes_index_day_and_matches_step11_semantics(tmp_path, window
         encoding="utf-8",
     )
     ds = lp.build_split_dataset(split, tmp_path / "work", config, base, window_days)
-    # Step 11 window: [index - window, index), i.e. offsets 1..window days (all history: > 0).
+    # Classical_ml step 01 window: [index - window, index), i.e. offsets 1..window days (all history: > 0).
     expected = sorted(kept, reverse=True)
     for row in ds:
         assert row["concept_ids"] == [str(d) for d in expected]
@@ -411,7 +411,7 @@ def test_step15_end_to_end(step, tmp_path):
     )
 
     out = tmp_path / "features"
-    mod = step("15_linear_probe_features.py")
+    mod = step("cehrbert_model/13_linear_probe_features.py")
     rc = mod.main(
         [
             "--splits-file", str(splits_file),
@@ -491,7 +491,7 @@ def _run_step15_with_prompt(step, tmp_path, offsets_by_person, ctx, batch_size, 
         encoding="utf-8",
     )
     out = tmp_path / "features"
-    mod = step("15_linear_probe_features.py")
+    mod = step("cehrbert_model/13_linear_probe_features.py")
     rc = mod.main(
         [
             "--splits-file", str(splits_file),
@@ -579,7 +579,7 @@ def test_step15_without_flag_drops_the_prompt(step, tmp_path):
 
 
 # --------------------------------------------------------------------------
-# Step 16
+# Step 14
 # --------------------------------------------------------------------------
 def _write_features(root, n_train=120, n_val=40, n_test=40, dim=6, seed=0, shuffle_test_labels=False):
     rng = np.random.default_rng(seed)
@@ -609,7 +609,7 @@ def _write_features(root, n_train=120, n_val=40, n_test=40, dim=6, seed=0, shuff
 
 
 def _run_step16(step, features, out, report):
-    mod = step("16_train_linear_probe.py")
+    mod = step("cehrbert_model/14_train_linear_probe.py")
     rc = mod.main(
         [
             "--features-dir", str(features),
@@ -679,7 +679,7 @@ def test_step16_tuning_never_reads_test(step, tmp_path):
 
 
 def test_step16_fails_without_features(step, tmp_path):
-    mod = step("16_train_linear_probe.py")
+    mod = step("cehrbert_model/14_train_linear_probe.py")
     rc = mod.main(
         [
             "--features-dir", str(tmp_path / "missing"),

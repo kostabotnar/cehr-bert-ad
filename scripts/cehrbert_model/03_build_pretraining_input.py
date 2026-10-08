@@ -1,8 +1,8 @@
 #!/usr/bin/env python
-"""Step 3b: Build the pretraining input without the held-out test patients.
+"""Step 03: Build the pretraining input without the held-out test patients.
 
-Writes ``data/cehrbert_data/patient_sequence_pretrain``: ``patient_sequence`` (step 2) minus every
-person in the ``test`` split of ``data/cohort/splits.parquet`` (step 6). Pretraining (step 4,
+Writes ``data/cehrbert_data/patient_sequence_pretrain``: ``patient_sequence`` (step 01) minus every
+person in the ``test`` split of ``data/cohort/splits.parquet`` (cohort step 01). Pretraining (step 05,
 ``data_folder`` in ``ad_pretrain_config.yaml``) reads only this folder, so the test patients are
 in neither the pretraining train nor validation split. The Spark layout is kept: one file per
 source file, same names, schema and snappy compression (a file left with no rows is skipped).
@@ -10,8 +10,8 @@ source file, same names, schema and snappy compression (a file left with no rows
 The step reports the sequence counts (total, removed, remaining) and fails if any test person
 is still present in the output.
 
-Run after step 6 and before steps 3 and 4:
-    python 03b_build_pretraining_input.py
+Run after cohort step 01 and before steps 04 and 05:
+    python cehrbert_model/03_build_pretraining_input.py
 """
 
 from __future__ import annotations
@@ -20,7 +20,7 @@ import argparse
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from pipeline import paths  # noqa: E402
 from pipeline import pretrain_data as pd_  # noqa: E402
@@ -32,19 +32,21 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--patient-sequence-dir", default=str(paths.PATIENT_SEQUENCE_DIR))
     parser.add_argument("--splits-file", default=str(paths.COHORT_SPLITS_FILE))
     parser.add_argument("--output-dir", default=str(paths.PATIENT_SEQUENCE_PRETRAIN_DIR))
-    parser.add_argument("--report-dir", default=str(paths.report_dir_for("03b_build_pretraining_input")))
+    parser.add_argument(
+        "--report-dir", default=str(paths.report_dir_for("cehrbert_model", "03_build_pretraining_input"))
+    )
     args = parser.parse_args(argv)
 
-    report = StepReport("03b_build_pretraining_input", title="Step 3b: Build the pretraining input (no test patients)")
+    report = StepReport("03_build_pretraining_input", title="Step 03: Build the pretraining input (no test patients)")
     src, dst = Path(args.patient_sequence_dir), Path(args.output_dir)
     for name, value in (("patient_sequence_dir", src), ("splits_file", args.splits_file), ("output_dir", dst)):
         report.add_metric(name, str(value))
 
     if not report.add_check("patient_sequence has parquet files", bool(pd_.sequence_files(src)), detail=str(src)):
-        report.note("Run step 2 first.")
+        report.note("Run step 01 first.")
         return _finalize(report, args.report_dir)
     if not report.add_check("splits file exists", Path(args.splits_file).is_file(), detail=args.splits_file):
-        report.note("Run step 6 first.")
+        report.note("Run cohort step 01 first.")
         return _finalize(report, args.report_dir)
     if src.resolve() == dst.resolve():
         report.add_check("output differs from the source folder", False, detail=str(dst))
@@ -74,7 +76,7 @@ def main(argv: list[str] | None = None) -> int:
         counts["rows_removed"] + counts["rows_remaining"] == counts["rows_total"],
         detail=f"{counts['rows_removed']} + {counts['rows_remaining']} vs {counts['rows_total']}",
     )
-    # Step 6 keeps only persons with a sequence, so a shortfall means it ran on other sequences.
+    # Cohort step 01 keeps only persons with a sequence, so a shortfall means it ran on other sequences.
     report.warn(
         "every test person had a sequence",
         ok=counts["rows_removed"] == len(test_ids),
@@ -88,7 +90,7 @@ def _finalize(report: StepReport, report_dir: str) -> int:
     report.print_summary()
     print(f"\nReport written to {report_dir}")
     if report.passed:
-        print("Next: python 03_evaluate_pretrain_config.py")
+        print("Next: python cehrbert_model/04_validate_pretrain_config.py")
     return report.exit_code()
 
 

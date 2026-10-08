@@ -1,4 +1,4 @@
-"""OMOP helpers shared by the cohort (step 6), the raw profile (step 18) and their tests.
+"""OMOP helpers shared by the cohort (cohort step 01), the raw profile (data_qc step 01) and their tests.
 
 Table scanning, AD code matching, birth date and age expressions, standardized mean differences
 and the iterative proportional fitting of sampling weights.

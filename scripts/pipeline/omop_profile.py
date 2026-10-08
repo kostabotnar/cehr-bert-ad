@@ -1,11 +1,11 @@
 """Profile raw OMOP data for Alzheimer's disease (AD) cases versus controls.
 
 Pure functions that take Polars frames and return DataFrames or plain dicts; the CLI, figures and
-report live in ``18_profile_omop.py``. Nothing here depends on step 6 or later outputs.
+report live in ``data_qc/01_profile_omop.py``. Nothing here depends on cohort step 01 or later outputs.
 
 Cohorts and index dates
 -----------------------
-* AD: any ``condition_source_value`` matching ``AD_SOURCE_REGEX`` (same semantics as step 6).
+* AD: any ``condition_source_value`` matching ``AD_SOURCE_REGEX`` (same semantics as cohort step 01).
   Index = first AD ``condition_start_date``.
 * Control: every other person. Two index views are profiled:
   ``control_last_visit`` (index = last visit date, controls without visits are dropped from

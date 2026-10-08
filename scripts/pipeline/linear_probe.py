@@ -1,7 +1,7 @@
-"""Shared, testable code for the frozen CEHR-BERT linear probe (steps 15 and 16).
+"""Shared, testable code for the frozen CEHR-BERT linear probe (cehrbert_model steps 13 and 14).
 
-Step 15 turns each patient's pre-index history into a fixed-size vector with the frozen
-pretrained encoder; step 16 fits an L2 logistic regression on those vectors. Two feature
+Cehrbert_model step 13 turns each patient's pre-index history into a fixed-size vector with the frozen
+pretrained encoder; cehrbert_model step 14 fits an L2 logistic regression on those vectors. Two feature
 kinds are produced from ``last_hidden_state``:
 
   * ``cls``  : the hidden state at position 0, where the collator prepends the [CLS] token
@@ -30,6 +30,8 @@ from sklearn.model_selection import GridSearchCV, StratifiedKFold
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
+from . import paths
+
 FEATURE_KINDS = ("cls", "mean")
 SPLIT_NAMES = ("train", "val", "test")
 
@@ -46,7 +48,7 @@ CLASS_WEIGHT_GRID = (None, "balanced")
 
 
 # --------------------------------------------------------------------------- #
-# Step 15: feature extraction
+# Cehrbert_model step 13: feature extraction
 # --------------------------------------------------------------------------- #
 def pool_features(
     last_hidden_state: torch.Tensor,
@@ -96,7 +98,7 @@ def shift_index_dates_for_exclusive_end(cohort):
 
     cehrbert keeps events with ``start <= epoch_time <= index_date`` and ``epoch_times`` are
     midnight UTC, so a date-valued index_date would include events on the index date. The
-    comparability contract (and step 11) use ``[index_date - window, index_date)``. Ending the
+    comparability contract (and classical_ml step 01) use ``[index_date - window, index_date)``. Ending the
     window one second early excludes index-day events and, with the window length unchanged,
     keeps events on index - window and drops index - window - 1 day. Applies to the
     unbounded window too (the end is shifted, the start stays at 0).
@@ -314,7 +316,7 @@ def load_split_features(features_dir: str | Path, split: str, kind: str) -> tupl
 
 
 # --------------------------------------------------------------------------- #
-# Step 16: tuning
+# Cehrbert_model step 14: tuning
 # --------------------------------------------------------------------------- #
 def build_search(cv_folds: int = 5, seed: int = 42, n_jobs: int = -1) -> GridSearchCV:
     """StandardScaler + L2 logistic regression, tuned over C and class_weight by CV AUROC."""
@@ -348,8 +350,8 @@ def evaluate_command(
     seed: int = EVAL_SEED,
     cal_bins: int = EVAL_CAL_BINS,
 ) -> list[str]:
-    """Command line that runs 10_evaluate.py on one feature kind's prediction folders."""
-    script = Path(__file__).resolve().parents[1] / "10_evaluate.py"
+    """Command line that runs evaluation/01_evaluate.py on one feature kind's prediction folders."""
+    script = paths.EVALUATION_DIR / "01_evaluate.py"
     return [
         sys.executable,
         str(script),

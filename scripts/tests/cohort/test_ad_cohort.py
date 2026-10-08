@@ -1,4 +1,4 @@
-"""Tests for the step 6 cohort definition: anchors, control candidates, the year draw and inclusion rules."""
+"""Tests for the step 01 cohort definition: anchors, control candidates, the year draw and inclusion rules."""
 
 from __future__ import annotations
 
@@ -22,7 +22,7 @@ AD = "ICD-10-CM:G30.9"
 
 @pytest.fixture
 def mod(step):
-    return step("06_prepare_finetuning_data.py")
+    return step("cohort/01_build_cohort.py")
 
 
 def ev(person, date, concept=100, visit=1):

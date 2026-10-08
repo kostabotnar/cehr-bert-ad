@@ -1,12 +1,12 @@
 #!/usr/bin/env python
-"""Step 12: Train the classical-ML baselines (L2 logistic regression, XGBoost).
+"""Step 02: Train the classical-ML baselines (L2 logistic regression, XGBoost).
 
 These two models predict the *same* AD task as CEHR-BERT and are scored by the *same*
-evaluation code (``pipeline.evaluation`` / ``10_evaluate.py``). This step consumes the
-tabular feature matrices written by step 11 (``build/baselines/features/``), tunes each
+evaluation code (``pipeline.evaluation`` / ``evaluation/01_evaluate.py``). This step consumes the
+tabular feature matrices written by step 01 (``build/baselines/features/``), tunes each
 model by cross-validated AUROC on the training split, refits on train, and writes
 predictions in CEHR-BERT's prediction-parquet schema so the baseline folders are drop-in
-inputs to ``10_evaluate.py``.
+inputs to ``evaluation/01_evaluate.py``.
 
 Models
 ------
@@ -17,7 +17,7 @@ Models
     validation split.
 
 The sanity AUROC/AUPRC numbers printed here are *not* authoritative -- the headline metrics
-(with bootstrap CIs, calibration, operating points) come from ``10_evaluate.py`` run against
+(with bootstrap CIs, calibration, operating points) come from ``evaluation/01_evaluate.py`` run against
 the prediction folders this step writes.
 
 Outputs (under build/baselines/)
@@ -27,11 +27,11 @@ Outputs (under build/baselines/)
   xgboost/test_predictions/predictions.parquet
   xgboost/validation_predictions/predictions.parquet
   xgboost/model.joblib, xgboost/best_params.json
-  build/reports/12_train_baselines/{status.json,report.md}
+  build/reports/02_train_baselines/{status.json,report.md}
 
 Usage
-  python 12_train_baselines.py
-  python 12_train_baselines.py --cv-folds 5 --xgb-iter 30 --seed 42
+  python classical_ml/02_train_baselines.py
+  python classical_ml/02_train_baselines.py --cv-folds 5 --xgb-iter 30 --seed 42
 """
 
 from __future__ import annotations
@@ -50,7 +50,7 @@ from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import FunctionTransformer, MaxAbsScaler
 from xgboost import XGBClassifier
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from pipeline import baselines as bl  # noqa: E402
 from pipeline import paths  # noqa: E402
@@ -105,7 +105,7 @@ def _build_xgb_search(cv: StratifiedKFold, scale_pos_weight: float, n_iter: int,
 
 
 def _quick_scores(y_true: np.ndarray, y_prob: np.ndarray) -> tuple[float, float]:
-    """Sanity AUROC / AUPRC (authoritative metrics come from 10_evaluate.py)."""
+    """Sanity AUROC / AUPRC (authoritative metrics come from evaluation/01_evaluate.py)."""
     return float(roc_auc_score(y_true, y_prob)), float(average_precision_score(y_true, y_prob))
 
 
@@ -144,7 +144,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--features-dir",
         default=None,
-        help="Folder of {train,val,test}_X.npz / *_meta.npz from step 11 "
+        help="Folder of {train,val,test}_X.npz / *_meta.npz from step 01 "
         "(default: per-run features_dir for the run label)",
     )
     parser.add_argument(
@@ -168,9 +168,9 @@ def main(argv: list[str] | None = None) -> int:
     label = paths.run_label(args.window_days, args.ctx)
     features_dir = Path(args.features_dir) if args.features_dir else paths.features_dir(label)
     output_dir = Path(args.output_dir) if args.output_dir else paths.baselines_dir(label)
-    report_dir = Path(args.report_dir) if args.report_dir else paths.build_report_dir_for("12_train_baselines", label)
+    report_dir = Path(args.report_dir) if args.report_dir else paths.build_report_dir_for("02_train_baselines", label)
 
-    report = StepReport("12_train_baselines", title="Step 12 - Train classical-ML baselines")
+    report = StepReport("02_train_baselines", title="Step 02 - Train classical-ML baselines")
     report.add_metric("run_label", label)
     report.add_metric("features_dir", str(features_dir))
     report.add_metric("output_dir", str(output_dir))
@@ -308,7 +308,7 @@ def _finalize(report: StepReport, report_dir: str) -> int:
     report.print_summary()
     print(f"\nReport written to {report_dir}")
     if report.passed:
-        print("Next: python 13_compare_models.py")
+        print("Next: python evaluation/02_compare_models.py")
     return report.exit_code()
 
 

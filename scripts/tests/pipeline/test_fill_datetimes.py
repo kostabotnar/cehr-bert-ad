@@ -1,4 +1,4 @@
-"""Tests for step 01b (fill null datetimes) and the step 02 visit datetime preflight."""
+"""Tests for data_verification step 02 (fill null datetimes) and the cehrbert_model step 01 visit datetime preflight."""
 
 from __future__ import annotations
 
@@ -277,7 +277,7 @@ def test_guard_refuses_derived(tmp_path, monkeypatch):
 
 
 def test_step_dry_run_then_real(step, data_dir, tmp_path):
-    mod = step("01b_fill_datetimes.py")
+    mod = step("data_verification/02_fill_datetimes.py")
     rd = str(tmp_path / "rep")
     assert mod.main(["--data-dir", str(data_dir), "--dry-run", "--report-dir", rd]) == 0
     assert _read(data_dir, "visit_occurrence")["visit_start_datetime"].null_count() == 3
@@ -291,7 +291,7 @@ def test_step_refuses_derived(step, tmp_path, monkeypatch):
     (src / "person").mkdir(parents=True)
     monkeypatch.setenv("HOME", str(home))
     pl.DataFrame({"person_id": [1]}).write_parquet(src / "person" / "p.parquet")
-    mod = step("01b_fill_datetimes.py")
+    mod = step("data_verification/02_fill_datetimes.py")
     assert mod.main(["--data-dir", str(src), "--report-dir", str(tmp_path / "rep")]) != 0
 
 
@@ -311,7 +311,7 @@ def test_preflight_all_null_and_missing_column(tmp_path):
     r = StepReport("t")
     ov.add_visit_datetime_check(r, tmp_path)
     assert r.status == "fail"
-    assert "01b" in r.checks[-1].detail
+    assert "02_fill_datetimes" in r.checks[-1].detail
     pl.DataFrame({"visit_start_date": [D(2020, 1, 1)]}).write_parquet(tmp_path / "visit_occurrence" / "v.parquet")
     r = StepReport("t")
     ov.add_visit_datetime_check(r, tmp_path)
@@ -322,7 +322,7 @@ def test_step02_fails_on_all_null_visit_datetimes(step, omop_dir, tmp_path):
     vo = omop_dir / "visit_occurrence" / "data.parquet"
     df = pl.read_parquet(vo).with_columns(visit_start_datetime=pl.lit(None, dtype=TS))
     df.write_parquet(vo)
-    mod = step("02_prepare_pretraining_data.py")
+    mod = step("cehrbert_model/01_generate_sequences.py")
     rc = mod.main(
         [
             "--input-folder",

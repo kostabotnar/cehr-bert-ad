@@ -1,12 +1,12 @@
 #!/usr/bin/env python
-"""Step 15: Extract frozen CEHR-BERT features for the linear probe.
+"""Step 13: Extract frozen CEHR-BERT features for the linear probe.
 
-For each canonical split (``train`` / ``val`` / ``test`` from ``splits.parquet``, step 6) the
+For each canonical split (``train`` / ``val`` / ``test`` from ``splits.parquet``, cohort step 01) the
 patient's pre-index history inside the look-back window is cut out of the full tokenized
-dataset (step 5b) with cehrbert's ``extract_cohort_sequences``, fed through the frozen
+dataset (step 07) with cehrbert's ``extract_cohort_sequences``, fed through the frozen
 pretrained encoder (no fine-tuning), and pooled into two feature sets (see
 ``pipeline.linear_probe``): ``cls`` (the [CLS] hidden state) and ``mean`` (mean over real
-tokens). Step 16 trains a logistic regression on them.
+tokens). Step 14 trains a logistic regression on them.
 
 Context longer than ``--ctx`` tokens is cut to the most recent tokens by the collator; the
 number and share of such patients is reported per split. With ``keep_demographic_prompt`` in
@@ -20,11 +20,11 @@ Outputs (under build/<run_label>/linear_probe/features/<split>/)
   meta.parquet                           person_id, index_date, label,
                                          n_tokens_before_truncation, truncated,
                                          n_event_tokens, demographic_prompt_tokens
-  build/<run_label>/reports/15_linear_probe_features/{status.json,report.md}
+  build/<run_label>/reports/13_linear_probe_features/{status.json,report.md}
 
 Usage
-  python 15_linear_probe_features.py
-  python 15_linear_probe_features.py --batch-size 256 --device cuda
+  python cehrbert_model/13_linear_probe_features.py
+  python cehrbert_model/13_linear_probe_features.py --batch-size 256 --device cuda
 """
 
 from __future__ import annotations
@@ -38,7 +38,7 @@ from pathlib import Path
 import numpy as np
 import polars as pl
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from pipeline import baselines as bl  # noqa: E402
 from pipeline import linear_probe as lp  # noqa: E402
@@ -63,7 +63,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--tokenized-dataset",
         default=str(paths.FULL_TOKENIZED_DIR),
-        help="Tokenized dataset with every patient (step 5b), or a folder holding exactly one such DatasetDict",
+        help="Tokenized dataset with every patient (step 07), or a folder holding exactly one such DatasetDict",
     )
     parser.add_argument("--finetune-config", default=str(paths.FINETUNE_CONFIG))
     parser.add_argument("--model-dir", default=str(paths.PRETRAIN_RESULTS_DIR))
@@ -86,10 +86,10 @@ def main(argv: list[str] | None = None) -> int:
     label = paths.run_label(args.window_days, args.ctx)
     output_dir = Path(args.output_dir) if args.output_dir else paths.linear_probe_features_dir(label)
     report_dir = (
-        Path(args.report_dir) if args.report_dir else paths.build_report_dir_for("15_linear_probe_features", label)
+        Path(args.report_dir) if args.report_dir else paths.build_report_dir_for("13_linear_probe_features", label)
     )
 
-    report = StepReport("15_linear_probe_features", title="Step 15 - Frozen CEHR-BERT features")
+    report = StepReport("13_linear_probe_features", title="Step 13 - Frozen CEHR-BERT features")
     for name, value in (
         ("run_label", label),
         ("window_days", args.window_days),
@@ -193,7 +193,7 @@ def _finalize(report: StepReport, report_dir: Path) -> int:
     report.print_summary()
     print(f"\nReport written to {report_dir}")
     if report.passed:
-        print("Next: python 16_train_linear_probe.py")
+        print("Next: python cehrbert_model/14_train_linear_probe.py")
     return report.exit_code()
 
 

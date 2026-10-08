@@ -1,21 +1,21 @@
 #!/usr/bin/env python
-"""Step 5b: Tokenize every patient's sequence with the pretrained tokenizer.
+"""Step 07: Tokenize every patient's sequence with the pretrained tokenizer.
 
-Pretraining (step 4) only sees ``patient_sequence_pretrain`` (no test patients), so its prepared
+Pretraining (step 05) only sees ``patient_sequence_pretrain`` (no test patients), so its prepared
 dataset cannot serve fine-tuning, prediction or the linear probe, which need every cohort
-patient. This step tokenizes the full ``patient_sequence`` (step 2) with the tokenizer that step 4
+patient. This step tokenizes the full ``patient_sequence`` (step 01) with the tokenizer that step 05
 trained (``tokenizer_name_or_path`` of the pretrain config) and the pretrain runner's own
 processing (``load_parquet_as_dataset`` + ``create_cehrbert_pretraining_dataset``), and saves a
 DatasetDict to ``data/full_tokenized`` (``tokenized_full_dataset_path`` of the fine-tune config).
 
-Splits: ``validation`` holds the persons of the canonical ``val`` split (step 6) and ``train``
+Splits: ``validation`` holds the persons of the canonical ``val`` split (cohort step 01) and ``train``
 everyone else, test patients included. ``extract_cohort_sequences`` keeps this assignment, so
-step 8 trains on canonical train and validates on canonical val; steps 9 and 15 pool the splits.
+step 09 trains on canonical train and validates on canonical val; steps 10 and 13 pool the splits.
 
 The step fails if any cohort patient (any split of ``splits.parquet``) is missing from the result.
 
 Usage:
-    python 05b_tokenize_full_dataset.py
+    python cehrbert_model/07_tokenize_full_dataset.py
 """
 
 from __future__ import annotations
@@ -24,7 +24,7 @@ import argparse
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from pipeline import paths  # noqa: E402
 from pipeline import pretrain_data as pd_  # noqa: E402
@@ -38,10 +38,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--patient-sequence-dir", default=str(paths.PATIENT_SEQUENCE_DIR))
     parser.add_argument("--splits-file", default=str(paths.COHORT_SPLITS_FILE))
     parser.add_argument("--output-dir", default=str(paths.FULL_TOKENIZED_DIR))
-    parser.add_argument("--report-dir", default=str(paths.report_dir_for("05b_tokenize_full_dataset")))
+    parser.add_argument("--report-dir", default=str(paths.report_dir_for("cehrbert_model", "07_tokenize_full_dataset")))
     args = parser.parse_args(argv)
 
-    report = StepReport("05b_tokenize_full_dataset", title="Step 5b: Tokenize the full patient_sequence")
+    report = StepReport("07_tokenize_full_dataset", title="Step 07: Tokenize the full patient_sequence")
     seq_dir, out_dir = Path(args.patient_sequence_dir), Path(args.output_dir)
     for name, value in (("config", args.config), ("patient_sequence_dir", seq_dir), ("output_dir", out_dir)):
         report.add_metric(name, str(value))
@@ -56,7 +56,7 @@ def main(argv: list[str] | None = None) -> int:
     if not report.add_check(
         "pretrained tokenizer exists", (tokenizer_dir / "tokenizer.json").is_file(), detail=str(tokenizer_dir)
     ):
-        report.note("Run step 4 first; this step never trains a tokenizer.")
+        report.note("Run step 05 first; this step never trains a tokenizer.")
         return _finalize(report, args.report_dir)
 
     val_ids = pd_.split_person_ids(args.splits_file, "val")
@@ -98,7 +98,7 @@ def _finalize(report: StepReport, report_dir: str) -> int:
     report.print_summary()
     print(f"\nReport written to {report_dir}")
     if report.passed:
-        print("Next: python 07_validate_finetune_config.py")
+        print("Next: python cehrbert_model/08_validate_finetune_config.py")
     return report.exit_code()
 
 

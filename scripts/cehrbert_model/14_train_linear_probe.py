@@ -1,25 +1,25 @@
 #!/usr/bin/env python
-"""Step 16: Train the linear probe on the frozen CEHR-BERT features from step 15.
+"""Step 14: Train the linear probe on the frozen CEHR-BERT features from step 13.
 
 For each feature kind (``cls``, ``mean``): StandardScaler + L2 logistic regression, tuned by
 5-fold cross-validated AUROC over C and class_weight on the TRAIN split only (the same
-protocol as the classical logistic regression in step 12), refit on train, then scored on
+protocol as the classical logistic regression in classical_ml step 02), refit on train, then scored on
 val and test. The kind with the higher VALIDATION AUROC is the primary result; the other is
 kept as a secondary result. Test is never used for any choice.
 
 Predictions use CEHR-BERT's prediction-parquet schema, so each kind's folders are inputs to
-``10_evaluate.py``, which this step runs per kind (skip with ``--skip-evaluate``).
+``evaluation/01_evaluate.py``, which this step runs per kind (skip with ``--skip-evaluate``).
 
 Outputs (under build/<run_label>/linear_probe/)
   <kind>/test_predictions/predictions.parquet
   <kind>/validation_predictions/predictions.parquet
   <kind>/model.joblib, <kind>/best_params.json
   summary.json                           which kind is primary, with validation AUROCs
-  build/<run_label>/reports/16_train_linear_probe/{status.json,report.md}
+  build/<run_label>/reports/14_train_linear_probe/{status.json,report.md}
 
 Usage
-  python 16_train_linear_probe.py
-  python 16_train_linear_probe.py --cv-folds 2 --n-jobs 1 --skip-evaluate
+  python cehrbert_model/14_train_linear_probe.py
+  python cehrbert_model/14_train_linear_probe.py --cv-folds 2 --n-jobs 1 --skip-evaluate
 """
 
 from __future__ import annotations
@@ -31,7 +31,7 @@ from pathlib import Path
 import joblib
 from sklearn.metrics import average_precision_score, roc_auc_score
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from pipeline import linear_probe as lp  # noqa: E402
 from pipeline import paths  # noqa: E402
@@ -42,7 +42,7 @@ from pipeline.reporting import StepReport  # noqa: E402
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Train the frozen CEHR-BERT linear probe")
     parser.add_argument(
-        "--features-dir", default=None, help="Step 15 features (default: per-run linear_probe/features)"
+        "--features-dir", default=None, help="Step 13 features (default: per-run linear_probe/features)"
     )
     parser.add_argument("--output-dir", default=None, help="Output folder (default: per-run linear_probe)")
     parser.add_argument(
@@ -55,7 +55,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--cv-folds", type=int, default=5)
     parser.add_argument("--n-jobs", type=int, default=-1, help="Parallel jobs for the grid search")
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--skip-evaluate", action="store_true", help="Do not run 10_evaluate.py per feature kind")
+    parser.add_argument(
+        "--skip-evaluate", action="store_true", help="Do not run evaluation/01_evaluate.py per feature kind"
+    )
     parser.add_argument("--n-bootstrap", type=int, default=lp.EVAL_N_BOOTSTRAP)
     parser.add_argument("--cal-bins", type=int, default=lp.EVAL_CAL_BINS)
     parser.add_argument("--report-dir", default=None, help="Report dir (default: per-run report dir)")
@@ -65,10 +67,10 @@ def main(argv: list[str] | None = None) -> int:
     features_dir = Path(args.features_dir) if args.features_dir else paths.linear_probe_features_dir(label)
     output_dir = Path(args.output_dir) if args.output_dir else paths.linear_probe_dir(label)
     report_dir = (
-        Path(args.report_dir) if args.report_dir else paths.build_report_dir_for("16_train_linear_probe", label)
+        Path(args.report_dir) if args.report_dir else paths.build_report_dir_for("14_train_linear_probe", label)
     )
 
-    report = StepReport("16_train_linear_probe", title="Step 16 - Linear probe on frozen CEHR-BERT")
+    report = StepReport("14_train_linear_probe", title="Step 14 - Linear probe on frozen CEHR-BERT")
     for name, value in (
         ("run_label", label),
         ("features_dir", str(features_dir)),
@@ -151,12 +153,12 @@ def main(argv: list[str] | None = None) -> int:
         for kind in lp.FEATURE_KINDS:
             rc = lp.run_evaluate(
                 output_dir / kind,
-                paths.build_report_dir_for(f"10_evaluate_linear_probe_{kind}", label),
+                paths.build_report_dir_for(f"01_evaluate_linear_probe_{kind}", label),
                 n_bootstrap=args.n_bootstrap,
                 seed=lp.EVAL_SEED,
                 cal_bins=args.cal_bins,
             )
-            report.add_check(f"{kind}: 10_evaluate.py succeeded", rc == 0, detail=f"exit code {rc}")
+            report.add_check(f"{kind}: evaluation/01_evaluate.py succeeded", rc == 0, detail=f"exit code {rc}")
 
     return _finalize(report, report_dir)
 

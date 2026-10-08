@@ -1,12 +1,12 @@
 #!/usr/bin/env python
-"""Step 11: Build tabular feature matrices for the classical-ML baselines.
+"""Step 01: Build tabular feature matrices for the classical-ML baselines.
 
 CEHR-BERT eats token sequences; L2 logistic regression and XGBoost need a fixed-width
 design matrix. This step builds one from the OMOP source tables, using the *same* patient
 partition CEHR-BERT used so the downstream comparison is apples-to-apples:
 
   * splits read by ``pipeline.baselines.recover_splits`` from the canonical split file
-    written by step 6 (``data/cohort/splits.parquet``); the step fails when it is missing
+    written by cohort step 01 (``data/cohort/splits.parquet``); the step fails when it is missing
   * features frozen strictly before each patient's ``index_date``, within a fixed
     look-back window (default 365 days = ad_finetune_config observation_window)
   * per-concept occurrence **counts** (condition / drug / procedure) + demographics
@@ -19,11 +19,11 @@ Outputs (under build/baselines/features/)
   {train,val,test}_meta.npz     y / person_ids / index_dates aligned to the matrix rows
   feature_spec.json             kept vocabulary + demographic categories + age median
   feature_names.json            column-aligned feature names
-  build/reports/11_prepare_baseline_features/{status.json,report.md}
+  build/reports/01_prepare_features/{status.json,report.md}
 
 Usage
-  python 11_prepare_baseline_features.py
-  python 11_prepare_baseline_features.py --window-days 365 --min-prevalence 0.01
+  python classical_ml/01_prepare_features.py
+  python classical_ml/01_prepare_features.py --window-days 365 --min-prevalence 0.01
 """
 
 from __future__ import annotations
@@ -34,7 +34,7 @@ from pathlib import Path
 
 import polars as pl
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from pipeline import baselines as bl  # noqa: E402
 from pipeline import paths  # noqa: E402
@@ -45,7 +45,9 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Build baseline feature matrices")
     parser.add_argument("--data-dir", default=str(paths.OMOP_DIR))
     parser.add_argument(
-        "--splits-file", default=str(paths.COHORT_SPLITS_FILE), help="Canonical train/val/test split file from step 6"
+        "--splits-file",
+        default=str(paths.COHORT_SPLITS_FILE),
+        help="Canonical train/val/test split file from cohort step 01",
     )
     parser.add_argument(
         "--output-dir", default=None, help="Features output dir (default: per-run features_dir for the run label)"
@@ -63,11 +65,9 @@ def main(argv: list[str] | None = None) -> int:
 
     label = paths.run_label(args.window_days, args.ctx)
     out_dir = Path(args.output_dir) if args.output_dir else paths.features_dir(label)
-    report_dir = (
-        Path(args.report_dir) if args.report_dir else paths.build_report_dir_for("11_prepare_baseline_features", label)
-    )
+    report_dir = Path(args.report_dir) if args.report_dir else paths.build_report_dir_for("01_prepare_features", label)
 
-    report = StepReport("11_prepare_baseline_features", title="Step 11 - Prepare baseline feature matrices")
+    report = StepReport("01_prepare_features", title="Step 01 - Prepare baseline feature matrices")
     data_dir = Path(args.data_dir).resolve()
     report.add_metric("run_label", label)
     report.add_metric("data_dir", str(data_dir))
@@ -159,7 +159,7 @@ def main(argv: list[str] | None = None) -> int:
     report.print_summary()
     print(f"\nReport written to {report_dir}")
     if report.passed:
-        print("Next: python 12_train_baselines.py")
+        print("Next: python classical_ml/02_train_baselines.py")
     return report.exit_code()
 
 

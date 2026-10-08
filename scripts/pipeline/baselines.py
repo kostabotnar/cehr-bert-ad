@@ -1,9 +1,9 @@
 """Shared library for the classical-ML baselines (L2 logistic regression, XGBoost).
 
 These baselines predict the *same* AD task as CEHR-BERT and are scored by the *same*
-evaluation code (``pipeline.evaluation`` / ``10_evaluate.py``). To make the comparison
+evaluation code (``pipeline.evaluation`` / ``evaluation/01_evaluate.py``). To make the comparison
 fair, they reuse the identical patient partition, read from the canonical split file
-written by step 6 (``data/cohort/splits.parquet``, one row per patient with
+written by cohort step 01 (``data/cohort/splits.parquet``, one row per patient with
 ``split`` in {train, val, test}). :func:`recover_splits` requires that file and raises
 when it is missing.
 
@@ -67,7 +67,7 @@ class Splits:
 
 
 def load_canonical_splits(splits_file: str | Path) -> Splits:
-    """Build ``Splits`` from the step 6 split file (person_id, index_date, label, split)."""
+    """Build ``Splits`` from the cohort step 01 split file (person_id, index_date, label, split)."""
     df = pl.read_parquet(str(splits_file)).select(
         pl.col("person_id").cast(pl.Int64),
         pl.col("index_date").cast(pl.Date),
@@ -87,9 +87,9 @@ def load_canonical_splits(splits_file: str | Path) -> Splits:
 
 
 def recover_splits(splits_file: str | Path = paths.COHORT_SPLITS_FILE) -> Splits:
-    """Train/val/test cohort frames shared by all baselines, from the canonical split file of step 6."""
+    """Train/val/test cohort frames shared by all baselines, from the canonical split file of cohort step 01."""
     if not Path(splits_file).is_file():
-        raise FileNotFoundError(f"Canonical splits file {splits_file} not found; run step 6 first.")
+        raise FileNotFoundError(f"Canonical splits file {splits_file} not found; run cohort step 01 first.")
     return load_canonical_splits(splits_file)
 
 

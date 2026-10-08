@@ -1,12 +1,12 @@
 #!/usr/bin/env python
-"""Step 13: Compare the frozen CEHR-BERT linear probe and the classical baselines.
+"""Step 02: Compare the frozen CEHR-BERT linear probe and the classical baselines.
 
-Models compared (each evaluated with the *exact same* code, ``10_evaluate.py``):
+Models compared (each evaluated with the *exact same* code, ``evaluation/01_evaluate.py``):
 
   * the fine-tuned CEHR-BERT classifier, when its metrics exist (skipped with a warning otherwise)
   * the linear probe on the frozen pretrained CEHR-BERT: the primary feature kind named in
     ``linear_probe/summary.json`` and, in a separate row marked secondary, the other kind
-  * L2 logistic regression and XGBoost from step 12
+  * L2 logistic regression and XGBoost from classical_ml step 02
 
 Before anything is scored, a parity check compares every included model's TEST predictions with
 the canonical test split (person_ids, labels, row count including duplicates) and its VALIDATION
@@ -16,10 +16,10 @@ fails the step. Per-model counts are written to the step report and ``comparison
 Outputs
 -------
   build/<run_label>/comparison.json, comparison.md
-      per-model metrics (each with 95% CI from the model's step 10 metrics.json) and paired
+      per-model metrics (each with 95% CI from the model's step 01 metrics.json) and paired
       AUROC / AUPRC differences between every pair of models (paired patient bootstrap)
   build/<run_label>/figures/compare_roc.png, compare_pr.png
-  build/<run_label>/reports/13_compare_models/{status.json,report.md}
+  build/<run_label>/reports/02_compare_models/{status.json,report.md}
 
 Inputs
 ------
@@ -30,8 +30,8 @@ Inputs
 
 Usage
 -----
-  python 13_compare_models.py
-  python 13_compare_models.py --skip-eval          # reuse existing metrics.json
+  python evaluation/02_compare_models.py
+  python evaluation/02_compare_models.py --skip-eval          # reuse existing metrics.json
 """
 
 from __future__ import annotations
@@ -42,7 +42,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from pipeline import baselines as bl  # noqa: E402
 from pipeline import comparison as cmp  # noqa: E402
@@ -57,11 +57,11 @@ MODEL_LABELS = {
 }
 CEHRBERT_LABEL = "CEHR-BERT"
 
-# Operating point reported in the comparison table (matches 10_evaluate's headline).
+# Operating point reported in the comparison table (matches 01_evaluate's headline).
 PRIMARY_METHOD = "youden"
 
-# Every model must be scored with the same 10_evaluate.py arguments; pass them explicitly
-# so a change to 10_evaluate's defaults cannot silently make the models incomparable.
+# Every model must be scored with the same evaluation/01_evaluate.py arguments; pass them explicitly
+# so a change to 01_evaluate's defaults cannot silently make the models incomparable.
 EVAL_N_BOOTSTRAP = 2000
 EVAL_SEED = 42
 EVAL_CAL_BINS = 10
@@ -76,8 +76,8 @@ def evaluate_command(
     seed: int = EVAL_SEED,
     cal_bins: int = EVAL_CAL_BINS,
 ) -> list[str]:
-    """Command line that runs 10_evaluate.py on one model's prediction folders."""
-    evaluate_script = Path(__file__).resolve().parent / "10_evaluate.py"
+    """Command line that runs evaluation/01_evaluate.py on one model's prediction folders."""
+    evaluate_script = Path(__file__).resolve().parent / "01_evaluate.py"
     return [
         sys.executable,
         str(evaluate_script),
@@ -90,7 +90,7 @@ def evaluate_command(
         "--figures-dir",
         str(model_dir / "figures"),
         "--report-dir",
-        str(model_dir / "reports" / "10_evaluate"),
+        str(model_dir / "reports" / "01_evaluate"),
         "--n-bootstrap",
         str(n_bootstrap),
         "--seed",
@@ -107,7 +107,7 @@ def _evaluate_model(
     seed: int = EVAL_SEED,
     cal_bins: int = EVAL_CAL_BINS,
 ) -> None:
-    """Run 10_evaluate.py on one model's predictions; record success/failure."""
+    """Run evaluation/01_evaluate.py on one model's predictions; record success/failure."""
     cmd = evaluate_command(spec.evaluate_dir, n_bootstrap, seed, cal_bins)
     try:
         proc = subprocess.run(cmd, capture_output=True, text=True)
@@ -158,7 +158,7 @@ def _fmt_num(value: float | None, ndigits: int = 3) -> str:
 
 
 def _extract_row(label: str, metrics: dict, secondary: bool = False) -> dict:
-    """Pull the comparison fields out of a 10_evaluate metrics.json payload."""
+    """Pull the comparison fields out of a 01_evaluate metrics.json payload."""
     disc = metrics.get("discrimination", {}) or {}
     cal = metrics.get("calibration", {}) or {}
     op = (metrics.get("operating_points", {}) or {}).get(PRIMARY_METHOD, {}) or {}
@@ -198,7 +198,7 @@ def _build_markdown(rows: list[dict], paired: list[dict], n_resamples: int, seed
     lines = [
         "# Model comparison",
         "",
-        "All intervals are 95% percentile bootstrap intervals from each model's step 10 metrics.json. "
+        "All intervals are 95% percentile bootstrap intervals from each model's step 01 metrics.json. "
         f"Sensitivity, specificity and PPV use the `{PRIMARY_METHOD}` threshold selected on the validation split. "
         "Rows marked (secondary) were not chosen by validation AUROC.",
         "",
@@ -434,17 +434,22 @@ def main(argv: list[str] | None = None) -> int:
         help="Where to save compare_roc.png / compare_pr.png (default: per-run figures_dir)",
     )
     parser.add_argument(
-        "--skip-eval", action="store_true", help="Skip re-running 10_evaluate; reuse existing metrics.json"
+        "--skip-eval", action="store_true", help="Skip re-running 01_evaluate; reuse existing metrics.json"
     )
     parser.add_argument(
         "--n-bootstrap",
         type=int,
         default=EVAL_N_BOOTSTRAP,
-        help="Resamples for 10_evaluate.py (keep equal across models) and for the paired bootstrap",
+        help="Resamples for evaluation/01_evaluate.py (keep equal across models) and for the paired bootstrap",
     )
-    parser.add_argument("--seed", type=int, default=EVAL_SEED, help="Bootstrap seed, also passed to 10_evaluate.py")
     parser.add_argument(
-        "--cal-bins", type=int, default=EVAL_CAL_BINS, help="Passed to 10_evaluate.py; keep equal across models"
+        "--seed", type=int, default=EVAL_SEED, help="Bootstrap seed, also passed to evaluation/01_evaluate.py"
+    )
+    parser.add_argument(
+        "--cal-bins",
+        type=int,
+        default=EVAL_CAL_BINS,
+        help="Passed to evaluation/01_evaluate.py; keep equal across models",
     )
     parser.add_argument("--report-dir", default=None, help="Report dir (default: per-run report dir for the run label)")
     args = parser.parse_args(argv)
@@ -457,9 +462,9 @@ def main(argv: list[str] | None = None) -> int:
     cehrbert_metrics = (
         Path(args.cehrbert_metrics) if args.cehrbert_metrics else paths.eval_results_dir(run) / "metrics.json"
     )
-    report_dir = Path(args.report_dir) if args.report_dir else paths.build_report_dir_for("13_compare_models", run)
+    report_dir = Path(args.report_dir) if args.report_dir else paths.build_report_dir_for("02_compare_models", run)
 
-    report = StepReport("13_compare_models", title="Step 13 - Compare models")
+    report = StepReport("02_compare_models", title="Step 02 - Compare models")
     report.add_metric("run_label", run)
     report.add_metric("baselines", list(args.models))
     report.add_metric("baselines_dir", str(baselines_dir))
@@ -516,7 +521,7 @@ def main(argv: list[str] | None = None) -> int:
             report.add_check(f"{spec.label}: {name} predictions match canonical split", res.ok, detail=res.detail())
             report.add_metric(f"parity[{spec.label}][{name}]", res.detail())
 
-    # --- 4. evaluate with step 10 --------------------------------------------
+    # --- 4. evaluate with step 01 --------------------------------------------
     if args.skip_eval:
         report.note("--skip-eval set: reusing existing metrics.json for each model")
     else:

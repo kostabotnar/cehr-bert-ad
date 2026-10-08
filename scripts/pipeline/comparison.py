@@ -1,4 +1,4 @@
-"""Comparability checks and paired-difference tables for step 13.
+"""Comparability checks and paired-difference tables for evaluation step 02.
 
 ``check_parity`` compares one model's prediction folder against a canonical split (the
 person_ids and labels of the test or val split) and returns per-model counts. Any non-zero

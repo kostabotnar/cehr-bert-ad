@@ -1,10 +1,10 @@
-"""Canonical filesystem locations for the AD pipeline.
+"""Canonical filesystem locations for the AD pipeline parts.
 
 All paths are derived from ``PROJECT_ROOT`` so the scripts work regardless of the
-current working directory. ``PROJECT_ROOT`` is the repository root
-(``.../cehr-bert``), two levels above ``scripts/ad_pipeline``.
+current working directory. ``PROJECT_ROOT`` is the repository root (``.../cehr-bert``),
+the parent of ``SCRIPTS_DIR`` (``scripts/``), which holds this package and one folder per part.
 
-Evaluation outputs (steps 10 / 10a) are nested per experiment under
+Evaluation outputs (cehrbert_model validation predictions, evaluation) are nested per experiment under
 ``build/<run_label>/``, where the run label encodes the experiment parameters
 (look-back window in days and CEHR-BERT token cap). The label format is
 ``w_<window>_ctx<ctx>`` (e.g. ``w_all_ctx4096``, ``w_365_ctx512``), with
@@ -17,35 +17,52 @@ from __future__ import annotations
 
 from pathlib import Path
 
-# .../cehr-bert/scripts/ad_pipeline/pipeline/paths.py
+# .../cehr-bert/scripts/pipeline/paths.py
 #   parents[0] = pipeline
-#   parents[1] = ad_pipeline
-#   parents[2] = scripts
-#   parents[3] = cehr-bert  (PROJECT_ROOT)
-AD_PIPELINE_DIR = Path(__file__).resolve().parents[1]
-PROJECT_ROOT = Path(__file__).resolve().parents[3]
+#   parents[1] = scripts  (SCRIPTS_DIR)
+#   parents[2] = cehr-bert  (PROJECT_ROOT)
+SCRIPTS_DIR = Path(__file__).resolve().parents[1]
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
-# --- pipeline assets -------------------------------------------------------
-CONFIG_DIR = AD_PIPELINE_DIR / "configs"
-PRETRAIN_CONFIG = CONFIG_DIR / "ad_pretrain_config.yaml"
-FINETUNE_CONFIG = CONFIG_DIR / "ad_finetune_config.yaml"
-REPORTS_DIR = AD_PIPELINE_DIR / "reports"
+# --- part folders ----------------------------------------------------------
+DATA_VERIFICATION_DIR = SCRIPTS_DIR / "data_verification"
+COHORT_PART_DIR = SCRIPTS_DIR / "cohort"
+DATA_QC_DIR = SCRIPTS_DIR / "data_qc"
+CEHRBERT_MODEL_DIR = SCRIPTS_DIR / "cehrbert_model"
+CLASSICAL_ML_DIR = SCRIPTS_DIR / "classical_ml"
+EVALUATION_DIR = SCRIPTS_DIR / "evaluation"
+FEATURE_IMPORTANCE_DIR = SCRIPTS_DIR / "feature_importance"
+# Folder names in the order run_all.sh runs them.
+PARTS = (
+    "data_verification",
+    "cohort",
+    "data_qc",
+    "cehrbert_model",
+    "classical_ml",
+    "evaluation",
+    "feature_importance",
+)
+
+# --- part assets -----------------------------------------------------------
+PRETRAIN_CONFIG = CEHRBERT_MODEL_DIR / "configs" / "ad_pretrain_config.yaml"
+FINETUNE_CONFIG = CEHRBERT_MODEL_DIR / "configs" / "ad_finetune_config.yaml"
+OMOP_PROFILE_CONCEPTS = DATA_QC_DIR / "configs" / "omop_profile_concepts.yaml"
 
 # --- data tree -------------------------------------------------------------
 DATA_DIR = PROJECT_ROOT / "data"
 OMOP_DIR = DATA_DIR / "omop_data"
 CEHRBERT_DATA_DIR = DATA_DIR / "cehrbert_data"
 # Read-only view of the OMOP table folders (symlinks). cehrbert_data writes processed_measurement and reads
-# qualified_concept_list inside its input folder, so step 02 points it here and never at OMOP_DIR.
+# qualified_concept_list inside its input folder, so cehrbert_model step 01 points it here and never at OMOP_DIR.
 CEHRBERT_OMOP_INPUT_DIR = CEHRBERT_DATA_DIR / "omop_input"
 PATIENT_SEQUENCE_DIR = CEHRBERT_DATA_DIR / "patient_sequence"
-# patient_sequence without the step 6 test patients; the only input of pretraining (step 3b).
+# patient_sequence without the cohort step 01 test patients; the only input of pretraining (cehrbert_model step 03).
 PATIENT_SEQUENCE_PRETRAIN_DIR = CEHRBERT_DATA_DIR / "patient_sequence_pretrain"
 
 PRETRAIN_PREPARED_DIR = DATA_DIR / "pretrain_prepared"
 PRETRAIN_RESULTS_DIR = DATA_DIR / "pretrain_results"
-# Every patient of patient_sequence tokenized with the pretrained tokenizer (step 5b); read by
-# steps 8, 9, 10a and 15 through tokenized_full_dataset_path.
+# Every patient of patient_sequence tokenized with the pretrained tokenizer (cehrbert_model step 07); read by
+# cehrbert_model steps 09, 10, 11 and 13 through tokenized_full_dataset_path.
 FULL_TOKENIZED_DIR = DATA_DIR / "full_tokenized"
 
 FINETUNE_PREPARED_DIR = DATA_DIR / "finetune_prepared"
@@ -56,12 +73,14 @@ PREDICT_PREPARED_DIR = DATA_DIR / "predict_prepared"
 TEST_PREDICTIONS_DIR = FINETUNE_RESULTS_DIR / "test_predictions"
 VAL_PREDICTIONS_DIR = FINETUNE_RESULTS_DIR / "validation_predictions"
 
-# Evaluation outputs (steps 10 / 10a) live under build/, nested per experiment in
+# Evaluation outputs (cehrbert_model step 11, evaluation) live under build/, nested per experiment in
 # build/<run_label>/ (see run_label / the label-aware *_dir functions below).
 BUILD_DIR = PROJECT_ROOT / "build"
 
-# Raw OMOP profile (step 18): tables, figures and exclusion flow of AD cases versus controls.
+# Raw OMOP profile (data_qc step 01): tables, figures and exclusion flow of AD cases versus controls.
 OMOP_PROFILE_DIR = BUILD_DIR / "omop_profile"
+# Other data_qc outputs (patient history length statistics).
+DATA_QC_BUILD_DIR = BUILD_DIR / "data_qc"
 
 # Defaults for the experiment parameters that make up a run label.
 # These match ad_finetune_config.yaml (observation_window) and the pretrained model's
@@ -100,7 +119,7 @@ def build_reports_dir(label: str) -> Path:
 
 
 def build_report_dir_for(step_name: str, label: str) -> Path:
-    """Report directory for a step within a run, e.g. build/<label>/reports/10_evaluate."""
+    """Report directory for a step within a run, e.g. build/<label>/reports/01_evaluate."""
     return build_reports_dir(label) / step_name
 
 
@@ -124,21 +143,23 @@ def linear_probe_features_dir(label: str) -> Path:
     return linear_probe_dir(label) / "features"
 
 
-# Labeled cohort (step 6), built from the OMOP tables only: one row per patient with
+# Labeled cohort (cohort step 01), built from the OMOP tables only: one row per patient with
 # person_id, index_date, label and split in {train, val, test}.
 COHORT_DIR = DATA_DIR / "cohort"
 COHORT_SPLITS_FILE = COHORT_DIR / "splits.parquet"
 
 # Cohort folders read by the CEHR-BERT finetune runner (cohort_folder reads *.parquet from one
-# folder); derived from the splits file by step 02b.
+# folder); derived from the splits file by cehrbert_model step 02.
 CEHRBERT_COHORT_DIR = CEHRBERT_DATA_DIR / "cohort"
 CEHRBERT_COHORT_FINETUNE_DIR = CEHRBERT_COHORT_DIR / "finetune"
 CEHRBERT_COHORT_TEST_DIR = CEHRBERT_COHORT_DIR / "test"
 
 
-def report_dir_for(step_name: str) -> Path:
-    """Default report directory for a step, e.g. ``reports/01_validate_dataset``."""
-    return REPORTS_DIR / step_name
+def report_dir_for(part: str, step_name: str) -> Path:
+    """Default report directory for a step, e.g. ``scripts/cohort/reports/01_build_cohort``."""
+    if part not in PARTS:
+        raise ValueError(f"unknown part {part!r}; expected one of {', '.join(PARTS)}")
+    return SCRIPTS_DIR / part / "reports" / step_name
 
 
 def resolve_under_root(path: str | Path) -> Path:

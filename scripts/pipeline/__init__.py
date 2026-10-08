@@ -1,6 +1,6 @@
 """Shared, testable building blocks for the AD CEHR-BERT pipeline.
 
-Every step script (``scripts/ad_pipeline/NN_*.py``) is a thin entrypoint that wires
+Every step script (``scripts/<part>/NN_*.py``) is a thin entrypoint that wires
 command-line arguments to functions in this package and writes a :class:`StepReport`.
 
 Design rules:

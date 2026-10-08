@@ -16,18 +16,18 @@ import polars as pl
 import pytest
 import yaml
 
-AD_PIPELINE_DIR = Path(__file__).resolve().parents[1]
+SCRIPTS_DIR = Path(__file__).resolve().parents[1]
 # Make `import pipeline` work and allow loading digit-prefixed step scripts.
-sys.path.insert(0, str(AD_PIPELINE_DIR))
+sys.path.insert(0, str(SCRIPTS_DIR))
 
 
 # --------------------------------------------------------------------------
 # Step-script loader (filenames start with digits, so use importlib).
 # --------------------------------------------------------------------------
-def load_step(filename: str):
-    """Import a step script (e.g. '01_validate_dataset.py') as a module."""
-    path = AD_PIPELINE_DIR / filename
-    mod_name = "step_" + path.stem
+def load_step(relpath: str):
+    """Import a step script by its path relative to scripts/ (e.g. 'cohort/01_build_cohort.py')."""
+    path = SCRIPTS_DIR / relpath
+    mod_name = f"step_{path.parent.name}_{path.stem}"
     spec = importlib.util.spec_from_file_location(mod_name, path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -294,7 +294,7 @@ def finetune_config(tmp_path: Path, model_dir: Path, fake_tokenized_dataset: Pat
         "validation_split_percentage": 0.1,
         "do_train": True,
         "do_eval": True,
-        "do_predict": False,  # prediction is a separate step (step 9) on the held-out test cohort
+        "do_predict": False,  # prediction is a separate step (cehrbert_model step 10) on the held-out test cohort
         "num_train_epochs": 20,
         "learning_rate": 2e-05,
         "per_device_train_batch_size": 16,

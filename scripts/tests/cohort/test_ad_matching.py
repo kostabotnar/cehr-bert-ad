@@ -15,6 +15,6 @@ import pytest
     ],
 )
 def test_ad_source_value_is_prefix_match(step, value, expected):
-    mod = step("06_prepare_finetuning_data.py")
+    mod = step("cohort/01_build_cohort.py")
     df = pl.DataFrame({"condition_source_value": [value]}, schema={"condition_source_value": pl.String})
     assert df.select(mod.is_ad_source_value()).item() == expected

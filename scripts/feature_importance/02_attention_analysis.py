@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Step 14: Attention-weight analysis -- which clinical concepts drive predictions.
+"""Step 02: Attention-weight analysis -- which clinical concepts drive predictions.
 
 Runs the fine-tuned CEHR-BERT classifier over the held-out test cohort with attention
 output enabled, and attributes each prediction back to the input concept tokens using three
@@ -24,9 +24,9 @@ Two codebase-specific requirements are enforced here: the model is loaded with
 left off so each row is one patient with [CLS] at position 0.
 
 Usage
-  python 14_attention_analysis.py
-  python 14_attention_analysis.py --max-patients 300 --top-k 20
-  python 14_attention_analysis.py --device cuda --window-days 365 --ctx 512
+  python feature_importance/02_attention_analysis.py
+  python feature_importance/02_attention_analysis.py --max-patients 300 --top-k 20
+  python feature_importance/02_attention_analysis.py --device cuda --window-days 365 --ctx 512
 """
 
 from __future__ import annotations
@@ -40,7 +40,7 @@ from pathlib import Path
 import numpy as np
 import torch
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from pipeline import attention as attn  # noqa: E402
 from pipeline import paths  # noqa: E402
@@ -269,11 +269,11 @@ def main(argv: list[str] | None = None) -> int:
     output_dir = Path(args.output_dir) if args.output_dir else paths.run_dir(label) / "attention"
     fig_dir = paths.figures_dir(label)
     report_dir = (
-        Path(args.report_dir) if args.report_dir else paths.build_report_dir_for("14_attention_analysis", label)
+        Path(args.report_dir) if args.report_dir else paths.build_report_dir_for("02_attention_analysis", label)
     )
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    report = StepReport("14_attention_analysis", title="Step 14 - Attention-weight analysis")
+    report = StepReport("02_attention_analysis", title="Step 02 - Attention-weight analysis")
     report.add_metric("run_label", label)
     report.add_metric("model_dir", args.model_dir)
     report.add_metric("device", args.device)
@@ -287,7 +287,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     prep_ok = report.add_check("prepared test data exists", Path(args.prepared_dir).is_dir(), detail=args.prepared_dir)
     if not (model_ok and tok_ok and prep_ok):
-        report.note("Preflight failed. Run steps 6, 8 and 9 first.")
+        report.note("Preflight failed. Run cohort step 01 and cehrbert_model steps 09 and 10 first.")
         return _finalize(report, report_dir)
 
     max_length = int(load_yaml(Path(args.finetune_config)).get("max_position_embeddings", 512))

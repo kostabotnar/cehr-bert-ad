@@ -1,8 +1,8 @@
-"""Pretraining data that excludes the step 6 test patients, and the full tokenized dataset.
+"""Pretraining data that excludes the cohort step 01 test patients, and the full tokenized dataset.
 
-The pretraining input (``patient_sequence_pretrain``, step 3b) is ``patient_sequence`` without
+The pretraining input (``patient_sequence_pretrain``, cehrbert_model step 03) is ``patient_sequence`` without
 the test split of the canonical splits file, so the pretrained encoder never sees a test
-patient. Fine-tuning and the linear probe still need every cohort patient, so step 5b
+patient. Fine-tuning and the linear probe still need every cohort patient, so cehrbert_model step 07
 tokenizes the full ``patient_sequence`` with the trained tokenizer and the pretrain runner's
 own processing into ``data/full_tokenized``.
 
@@ -44,7 +44,7 @@ def sequence_person_ids(seq_dir: str | Path, require_concepts: bool = True) -> s
     """person_ids with a sequence in ``seq_dir``.
 
     With ``require_concepts`` only sequences with ``num_of_concepts > 0`` count: the tokenization
-    (``create_cehrbert_pretraining_dataset``) drops the others, so they never reach step 8.
+    (``create_cehrbert_pretraining_dataset``) drops the others, so they never reach cehrbert_model step 09.
     """
     files = sequence_files(seq_dir)
     if not files:
@@ -243,7 +243,7 @@ def tokenize_full_dataset(
     the pretrain config's data arguments and the tokenizer already trained in
     ``tokenizer_name_or_path`` (it is never retrained here). The result is a DatasetDict with
     ``validation`` = the persons in ``validation_person_ids`` and ``train`` = everyone else, because
-    ``extract_cohort_sequences`` keeps that assignment and step 8 uses it as its train/validation
+    ``extract_cohort_sequences`` keeps that assignment and cehrbert_model step 09 uses it as its train/validation
     split. Returns the saved DatasetDict.
     """
     from datasets import DatasetDict, load_from_disk

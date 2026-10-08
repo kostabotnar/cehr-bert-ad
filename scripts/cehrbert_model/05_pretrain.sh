@@ -1,11 +1,11 @@
 #!/bin/bash
-# Step 4 (launcher): Pretrain CEHR-BERT on the generated patient sequences.
+# Step 05 (launcher): Pretrain CEHR-BERT on the generated patient sequences.
 #
 # Thin wrapper: invokes the cehrbert pretraining runner with the given config from the
-# project root. Preflight validation and result reporting live in 04_pretrain.py —
+# project root. Preflight validation and result reporting live in cehrbert_model/05_pretrain.py -
 # prefer running that:
 #
-#     python 04_pretrain.py
+#     python cehrbert_model/05_pretrain.py
 #
 # Args:
 #   $1 (optional) path to the pretraining config yaml.

@@ -1,4 +1,4 @@
-"""Tests for the canonical train/val/test split written by step 6."""
+"""Tests for the canonical train/val/test split written by step 01."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ import pytest
 
 @pytest.fixture
 def mod(step):
-    return step("06_prepare_finetuning_data.py")
+    return step("cohort/01_build_cohort.py")
 
 
 @pytest.fixture

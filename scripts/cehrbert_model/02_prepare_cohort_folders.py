@@ -1,22 +1,22 @@
 #!/usr/bin/env python
-"""Step 02b: Write the CEHR-BERT cohort folders from the canonical splits.
+"""Step 02: Write the CEHR-BERT cohort folders from the canonical splits.
 
 The finetune runner reads a cohort folder (``cohort_folder``, every ``*.parquet`` in it). From
-``data/cohort/splits.parquet`` (step 6) this step writes
+``data/cohort/splits.parquet`` (cohort step 01) this step writes
 
     data/cehrbert_data/cohort/finetune/cohort.parquet   train + val rows
     data/cehrbert_data/cohort/test/cohort.parquet       test rows
 
 with the columns person_id (int64), index_date (date) and label (int64).
 
-Gate: every cohort person must have a non-empty sequence in ``patient_sequence`` (step 2). A
-person without one cannot be tokenized and would make step 8 fail; the step fails and lists up to 20
-person_ids. Step 6 builds the cohort from OMOP tables only, with an event rule that mirrors how the
+Gate: every cohort person must have a non-empty sequence in ``patient_sequence`` (step 01). A
+person without one cannot be tokenized and would make step 09 fail; the step fails and lists up to 20
+person_ids. Cohort step 01 builds the cohort from OMOP tables only, with an event rule that mirrors how the
 sequences are built, so a failure here points at a mismatch between the two (for example a different
-``--min-concept-patients`` than the ``--min_num_of_patients`` of step 2).
+``--min-concept-patients`` than the ``--min_num_of_patients`` of step 01).
 
-Run after step 2 (and step 6):
-    python 02b_prepare_cohort_folders.py
+Run after step 01 (and cohort step 01):
+    python cehrbert_model/02_prepare_cohort_folders.py
 """
 
 from __future__ import annotations
@@ -27,7 +27,7 @@ from pathlib import Path
 
 import polars as pl
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from pipeline import paths  # noqa: E402
 from pipeline import pretrain_data as pd_  # noqa: E402
@@ -54,21 +54,23 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--patient-sequence-dir", default=str(paths.PATIENT_SEQUENCE_DIR))
     parser.add_argument("--finetune-dir", default=str(paths.CEHRBERT_COHORT_FINETUNE_DIR))
     parser.add_argument("--test-dir", default=str(paths.CEHRBERT_COHORT_TEST_DIR))
-    parser.add_argument("--report-dir", default=str(paths.report_dir_for("02b_prepare_cohort_folders")))
+    parser.add_argument(
+        "--report-dir", default=str(paths.report_dir_for("cehrbert_model", "02_prepare_cohort_folders"))
+    )
     args = parser.parse_args(argv)
 
-    report = StepReport("02b_prepare_cohort_folders", title="Step 02b: Prepare the CEHR-BERT cohort folders")
+    report = StepReport("02_prepare_cohort_folders", title="Step 02: Prepare the CEHR-BERT cohort folders")
     splits_file, seq_dir = Path(args.splits_file), Path(args.patient_sequence_dir)
     report.add_metric("splits_file", str(splits_file))
     report.add_metric("patient_sequence_dir", str(seq_dir))
 
     if not report.add_check("splits file exists", splits_file.is_file(), detail=str(splits_file)):
-        report.note("Run step 6 first.")
+        report.note("Run cohort step 01 first.")
         return _finalize(report, args.report_dir)
     if not report.add_check(
         "patient_sequence has parquet files", bool(pd_.sequence_files(seq_dir)), detail=str(seq_dir)
     ):
-        report.note("Run step 2 first.")
+        report.note("Run step 01 first.")
         return _finalize(report, args.report_dir)
 
     splits = pl.read_parquet(splits_file)
@@ -113,7 +115,7 @@ def _finalize(report: StepReport, report_dir: str) -> int:
     report.print_summary()
     print(f"\nReport written to {report_dir}")
     if report.passed:
-        print("Next: python 03b_build_pretraining_input.py")
+        print("Next: python cehrbert_model/03_build_pretraining_input.py")
     return report.exit_code()
 
 

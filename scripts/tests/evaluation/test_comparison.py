@@ -1,4 +1,4 @@
-"""Step 13 (model comparison) with synthetic predictions, and the parity check behind it."""
+"""Step 02 (model comparison) with synthetic predictions, and the parity check behind it."""
 
 from __future__ import annotations
 
@@ -59,7 +59,7 @@ def run_dir(tmp_path):
 
 
 def _run_step13(step, root: Path, *extra: str) -> int:
-    return step("13_compare_models.py").main(
+    return step("evaluation/02_compare_models.py").main(
         [
             "--splits-file", str(root / "splits.parquet"),
             "--baselines-dir", str(root / "baselines"),

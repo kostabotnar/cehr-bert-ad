@@ -1,4 +1,4 @@
-"""Tests for pretraining without the test patients: steps 3b, 4 (preflight), 5 and 5b."""
+"""Tests for pretraining without the test patients: cehrbert_model steps 03, 05 (preflight), 06 and 07."""
 
 from __future__ import annotations
 
@@ -38,7 +38,7 @@ def _splits_file(tmp_path: Path, persons=range(1, 13), test=TEST_IDS, val=VAL_ID
 
 
 # --------------------------------------------------------------------------- #
-# Step 2: staging folder for cehrbert_data
+# Cehrbert_model step 01: staging folder for cehrbert_data
 # --------------------------------------------------------------------------- #
 def _omop_tables(root: Path, names) -> Path:
     for name in names:
@@ -85,10 +85,10 @@ def test_stage_omop_input_refuses_to_replace_a_real_folder(tmp_path):
 
 
 # --------------------------------------------------------------------------- #
-# Step 3b: pretraining input without the test persons
+# Cehrbert_model step 03: pretraining input without the test persons
 # --------------------------------------------------------------------------- #
-def test_step03b_removes_exactly_the_test_persons(step, spark_sequences, tmp_path):
-    mod = step("03b_build_pretraining_input.py")
+def test_step03_removes_exactly_the_test_persons(step, spark_sequences, tmp_path):
+    mod = step("cehrbert_model/03_build_pretraining_input.py")
     splits = _splits_file(tmp_path)
     out = tmp_path / "cehrbert_data" / "patient_sequence_pretrain"
     rep = tmp_path / "rep03b"
@@ -119,7 +119,7 @@ def test_step03b_removes_exactly_the_test_persons(step, spark_sequences, tmp_pat
     assert not (out.with_name(out.name + ".tmp")).exists()
 
 
-def test_step03b_output_loads_like_the_source(spark_sequences, tmp_path):
+def test_step03_output_loads_like_the_source(spark_sequences, tmp_path):
     pytest.importorskip("datasets")
     from cehrbert.runners.runner_util import load_parquet_as_dataset
 
@@ -134,7 +134,7 @@ def test_step03b_output_loads_like_the_source(spark_sequences, tmp_path):
     assert dataset.features == source.features
 
 
-def test_step03b_rerun_replaces_the_output(spark_sequences, tmp_path):
+def test_step03_rerun_replaces_the_output(spark_sequences, tmp_path):
     out = tmp_path / "pretrain_input"
     pd_.write_sequences_without(spark_sequences, out, {1})
     (out / "stale.parquet").write_bytes(b"x")
@@ -144,8 +144,8 @@ def test_step03b_rerun_replaces_the_output(spark_sequences, tmp_path):
     assert pd_.sequence_person_ids(out, require_concepts=False) == set(range(1, 13)) - {2, 3}
 
 
-def test_step03b_fails_without_splits(step, spark_sequences, tmp_path):
-    mod = step("03b_build_pretraining_input.py")
+def test_step03_fails_without_splits(step, spark_sequences, tmp_path):
+    mod = step("cehrbert_model/03_build_pretraining_input.py")
     rc = mod.main(
         [
             "--patient-sequence-dir", str(spark_sequences),
@@ -159,7 +159,7 @@ def test_step03b_fails_without_splits(step, spark_sequences, tmp_path):
 
 
 # --------------------------------------------------------------------------- #
-# Test-exclusion check on the pretraining prepared dataset (step 5)
+# Test-exclusion check on the pretraining prepared dataset (cehrbert_model step 06)
 # --------------------------------------------------------------------------- #
 def _dataset_dict(path: Path, train, validation) -> Path:
     datasets = pytest.importorskip("datasets")
@@ -195,7 +195,7 @@ def test_leak_check_fails_with_a_test_person(tmp_path, train, validation):
 
 
 def test_step05_fails_when_a_test_person_was_pretrained_on(step, model_dir, tmp_path):
-    mod = step("05_verify_pretraining.py")
+    mod = step("cehrbert_model/06_verify_pretraining.py")
     base = tmp_path / "pretrain_prepared"
     _dataset_dict(base / "patient_sequence_pretrain_abc", [1, 2, 3], [4])
     rep = tmp_path / "rep05"
@@ -207,7 +207,7 @@ def test_step05_fails_when_a_test_person_was_pretrained_on(step, model_dir, tmp_
 
 def test_step05_default_prepared_dir_comes_from_the_config(step, model_dir, tmp_path, monkeypatch):
     pytest.importorskip("transformers")
-    mod = step("05_verify_pretraining.py")
+    mod = step("cehrbert_model/06_verify_pretraining.py")
     cfg = _pretrain_config(tmp_path, tmp_path / "seq_pretrain", model_dir)
     prepared = pd_.pretrain_prepared_path(cfg, mod.paths.resolve_under_root)
     assert prepared.parent == tmp_path / "pretrain_prepared"
@@ -238,7 +238,7 @@ def test_prepared_path_hash_changes_with_keep_demographic_prompt(tmp_path, model
 
 
 # --------------------------------------------------------------------------- #
-# Step 4 preflight: input excludes test persons, no stale artifacts
+# Cehrbert_model step 05 preflight: input excludes test persons, no stale artifacts
 # --------------------------------------------------------------------------- #
 def _pretrain_config(tmp_path: Path, data_folder: Path, model_dir: Path, **extra) -> Path:
     tmp_path.mkdir(parents=True, exist_ok=True)
@@ -271,7 +271,7 @@ class _Recorder:
 
 
 def _run04(step, cfg, splits, tmp_path, monkeypatch):
-    mod = step("04_pretrain.py")
+    mod = step("cehrbert_model/05_pretrain.py")
     monkeypatch.setattr(mod.paths, "PRETRAIN_PREPARED_DIR", tmp_path / "pp")
     monkeypatch.setattr(mod.paths, "PRETRAIN_RESULTS_DIR", tmp_path / "pr")
     rec = _Recorder()
@@ -324,7 +324,7 @@ def test_stale_prepared_dataset_is_reported(spark_sequences, tmp_path):
 
 
 # --------------------------------------------------------------------------- #
-# Step 5b: full tokenized dataset
+# Cehrbert_model step 07: full tokenized dataset
 # --------------------------------------------------------------------------- #
 @pytest.fixture
 def trained_tokenizer_dir(spark_sequences, tmp_path):
@@ -368,9 +368,9 @@ def _rows_by_person(dataset_dict) -> dict:
     return rows
 
 
-def test_step05b_tokenizes_every_patient_like_the_runner(step, spark_sequences, trained_tokenizer_dir, tmp_path):
+def test_step07_tokenizes_every_patient_like_the_runner(step, spark_sequences, trained_tokenizer_dir, tmp_path):
     cfg, _ = trained_tokenizer_dir
-    mod = step("05b_tokenize_full_dataset.py")
+    mod = step("cehrbert_model/07_tokenize_full_dataset.py")
     splits = _splits_file(tmp_path, persons=range(1, 12))
     out = tmp_path / "full_tokenized"
     rep = tmp_path / "rep05b"
@@ -405,8 +405,8 @@ def test_step05b_tokenizes_every_patient_like_the_runner(step, spark_sequences, 
             assert got[person_id][column] == row[column], (person_id, column)
 
 
-def test_step05b_fails_without_a_tokenizer(step, spark_sequences, tmp_path):
-    mod = step("05b_tokenize_full_dataset.py")
+def test_step07_fails_without_a_tokenizer(step, spark_sequences, tmp_path):
+    mod = step("cehrbert_model/07_tokenize_full_dataset.py")
     cfg = _pretrain_config(tmp_path, spark_sequences, tmp_path / "no_results")
     rc = mod.main(
         [
@@ -421,9 +421,9 @@ def test_step05b_fails_without_a_tokenizer(step, spark_sequences, tmp_path):
     assert not (tmp_path / "full_tokenized").exists()
 
 
-def test_step05b_fails_when_a_cohort_person_has_no_sequence(step, spark_sequences, trained_tokenizer_dir, tmp_path):
+def test_step07_fails_when_a_cohort_person_has_no_sequence(step, spark_sequences, trained_tokenizer_dir, tmp_path):
     cfg, _ = trained_tokenizer_dir
-    mod = step("05b_tokenize_full_dataset.py")
+    mod = step("cehrbert_model/07_tokenize_full_dataset.py")
     rep = tmp_path / "rep"
     rc = mod.main(
         [

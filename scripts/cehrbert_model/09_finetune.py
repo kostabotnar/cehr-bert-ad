@@ -1,14 +1,14 @@
 #!/usr/bin/env python
-"""Step 8: Fine-tune CEHR-BERT for Alzheimer's Disease prediction.
+"""Step 09: Fine-tune CEHR-BERT for Alzheimer's Disease prediction.
 
-Fine-tunes on the fine-tuning cohort (``data/cehrbert_data/cohort/finetune`` from step 02b) with an internal
+Fine-tunes on the fine-tuning cohort (``data/cehrbert_data/cohort/finetune`` from step 02) with an internal
 train/validation split (``validation_split_percentage``). Prediction is a separate step
-(step 9) on the held-out test cohort, so this step runs with ``do_predict: false`` — no
+(step 10) on the held-out test cohort, so this step runs with ``do_predict: false`` - no
 test split is needed here, and the run completes in one launch.
 
 Usage:
-    python 08_finetune.py
-    python 08_finetune.py --config configs/ad_finetune_config.yaml
+    python cehrbert_model/09_finetune.py
+    python cehrbert_model/09_finetune.py --config cehrbert_model/configs/ad_finetune_config.yaml
 """
 
 from __future__ import annotations
@@ -17,13 +17,13 @@ import argparse
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from pipeline import launch, paths  # noqa: E402
 from pipeline.config_validation import add_finetune_config_checks, load_yaml, write_config  # noqa: E402
 from pipeline.reporting import StepReport  # noqa: E402
 
-WRAPPER = Path(__file__).resolve().parent / "08_finetune.sh"
+WRAPPER = Path(__file__).resolve().parent / "09_finetune.sh"
 
 ALL_HISTORY_DAYS = 36500  # sentinel look-back used when a negative window is requested
 
@@ -48,7 +48,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Fine-tune CEHR-BERT (preflight + launch)")
     parser.add_argument("--config", default=str(paths.FINETUNE_CONFIG))
     parser.add_argument("--skip-launch", action="store_true", help="Run preflight only; do not launch training")
-    parser.add_argument("--report-dir", default=str(paths.report_dir_for("08_finetune")))
+    parser.add_argument("--report-dir", default=str(paths.report_dir_for("cehrbert_model", "09_finetune")))
     parser.add_argument(
         "--max-position-embeddings",
         "--ctx",
@@ -68,14 +68,14 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
-    report = StepReport("08_finetune", title="Step 8 — Fine-tune CEHR-BERT")
+    report = StepReport("09_finetune", title="Step 09 - Fine-tune CEHR-BERT")
     config_path = Path(args.config)
     report.add_metric("config", args.config)
 
     # --- preflight ---------------------------------------------------------
     add_finetune_config_checks(report, config_path, paths.resolve_under_root)
     if not report.passed:
-        report.note("Config preflight failed; not launching training (see step 7).")
+        report.note("Config preflight failed; not launching training (see step 08).")
         return _finalize(report, args.report_dir)
 
     config = load_yaml(config_path)
@@ -83,7 +83,7 @@ def main(argv: list[str] | None = None) -> int:
         report.warn(
             "do_predict is off for fine-tuning",
             ok=False,
-            detail="do_predict=true; prediction is a separate step (step 9) on the test cohort",
+            detail="do_predict=true; prediction is a separate step (step 10) on the test cohort",
         )
 
     paths.FINETUNE_PREPARED_DIR.mkdir(parents=True, exist_ok=True)
@@ -120,7 +120,7 @@ def _finalize(report: StepReport, report_dir: str) -> int:
     report.print_summary()
     print(f"\nReport written to {report_dir}")
     if report.passed:
-        print("Next: python 09_predict.py")
+        print("Next: python cehrbert_model/10_predict.py")
     return report.exit_code()
 
 

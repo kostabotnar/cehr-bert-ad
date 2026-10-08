@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """Extract and rank feature importance for the trained LR and XGBoost baselines.
 
-Step 12 saves the fitted estimators (``model.joblib``) and step 11 saves a column-aligned
+Classical_ml step 02 saves the fitted estimators (``model.joblib``) and classical_ml step 01 saves a column-aligned
 ``feature_names.json``, but neither persists ranked importances. This helper loads both and
 writes ranked tables:
 
@@ -23,9 +23,9 @@ Outputs, under ``build/<label>/baselines/``:
   xgboost/feature_importance.csv   all features by importance
 
 Usage
-  python baseline_feature_importance.py                       # default run label
-  python baseline_feature_importance.py --window-days 365 --ctx 512
-  python baseline_feature_importance.py --baselines-dir build/w_365_ctx512/baselines --top 30
+  python feature_importance/01_baseline_importance.py                       # default run label
+  python feature_importance/01_baseline_importance.py --window-days 365 --ctx 512
+  python feature_importance/01_baseline_importance.py --baselines-dir build/w_365_ctx512/baselines --top 30
 """
 
 from __future__ import annotations
@@ -39,7 +39,7 @@ import joblib
 import numpy as np
 import pandas as pd
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from pipeline import paths  # noqa: E402
 

@@ -1,6 +1,6 @@
 """Write baseline model predictions in CEHR-BERT's prediction-parquet schema.
 
-The evaluation code (``pipeline.evaluation`` / ``10_evaluate.py``) loads a folder of
+The evaluation code (``pipeline.evaluation`` / ``evaluation/01_evaluate.py``) loads a folder of
 ``*.parquet`` and reads two columns: ``predicted_boolean_probability`` and
 ``boolean_value``. We emit the full schema the finetune runner produces so the baseline
 folders are drop-in replacements for ``data/finetune_results/{test,validation}_predictions``.
@@ -34,7 +34,7 @@ def write_predictions(
             "subject_id": np.asarray(person_ids).astype("int64"),
             "prediction_time": pd.to_datetime(np.asarray(index_dates)),
             "predicted_boolean_probability": np.asarray(y_prob, dtype=float),
-            # Left null like the finetune runner's output: thresholds are chosen in step 10.
+            # Left null like the finetune runner's output: thresholds are chosen in evaluation step 01.
             "predicted_boolean_value": pd.array([pd.NA] * n, dtype="boolean"),
             "boolean_value": np.asarray(y_true).astype(bool),
         }
