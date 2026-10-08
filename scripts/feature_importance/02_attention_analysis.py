@@ -13,11 +13,11 @@ The attribution target is the positive-class logit, so a high score means the co
 the prediction *toward AD*. Per-patient token scores are normalized to a distribution over
 real concept tokens (specials/visit markers excluded), then aggregated per concept and split
 by the model's predicted class (prob >= 0.5). Outputs, per run label, under
-``build/<label>/attention/``:
+``build/feature_importance/<label>/attention/``:
 
   concept_attribution_<group>.csv   ranked concepts per method (group = pred_pos / pred_neg)
   method_rank_correlation.json      Spearman rho between the three methods' rankings
-  figures/attention_top_concepts.png  top concepts driving positive predictions (3 methods)
+  ../figures/attention_top_concepts.png  top concepts driving positive predictions (3 methods)
 
 Two codebase-specific requirements are enforced here: the model is loaded with
 ``attn_implementation="eager"`` (flash attention returns no weights), and sample packing is
@@ -266,10 +266,10 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     label = paths.run_label(args.window_days, args.ctx)
-    output_dir = Path(args.output_dir) if args.output_dir else paths.run_dir(label) / "attention"
-    fig_dir = paths.figures_dir(label)
+    output_dir = Path(args.output_dir) if args.output_dir else paths.feature_importance_dir(label) / "attention"
+    fig_dir = paths.feature_importance_figures_dir(label)
     report_dir = (
-        Path(args.report_dir) if args.report_dir else paths.build_report_dir_for("02_attention_analysis", label)
+        Path(args.report_dir) if args.report_dir else paths.feature_importance_report_dir("02_attention_analysis", label)
     )
     output_dir.mkdir(parents=True, exist_ok=True)
 
