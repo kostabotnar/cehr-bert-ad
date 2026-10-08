@@ -57,8 +57,6 @@ def test_baseline_importance_missing_features_lists_available_classical_folders(
 
 def test_top_feature_tables_read_rankings_from_the_feature_importance_root(step, tmp_path, monkeypatch):
     monkeypatch.setattr(paths, "FEATURE_IMPORTANCE_BUILD_DIR", tmp_path / "feature_importance")
-    # to_markdown needs the optional tabulate package, which is not what this test checks.
-    monkeypatch.setattr(pd.DataFrame, "to_markdown", lambda self, index=False: "table")
     run = paths.feature_importance_dir(paths.run_label(365, 512))
     pd.DataFrame({"feature": FEATURES, "coefficient": [0.5, -0.2, 0.1]}).to_csv(
         _mk(run / "lr") / "feature_importance.csv", index=False
@@ -73,7 +71,8 @@ def test_top_feature_tables_read_rankings_from_the_feature_importance_root(step,
     pd.DataFrame({"concept_id": [1, 2], "concept_name": ["ICD-10-CM:I10", "6719"]}).to_parquet(concepts)
     assert step("feature_importance/03_top_feature_tables.py").main(["--concept-table", str(concepts)]) == 0
     tables = run / "feature_tables"
-    assert (tables / "lr_top10.csv").is_file() and (tables / "top_features.md").is_file()
+    assert (tables / "lr_top10.csv").is_file()
+    assert "| rank | feature |" in (tables / "top_features.md").read_text()
 
 
 def _mk(path):

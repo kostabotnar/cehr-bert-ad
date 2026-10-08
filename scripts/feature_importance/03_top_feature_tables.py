@@ -28,6 +28,7 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from pipeline import paths  # noqa: E402
+from pipeline.reporting import markdown_table  # noqa: E402
 
 # Curated descriptions keyed by resolved source code / token / feature name.
 # Drugs: RxNorm RXCUI -> ingredient (verified via https://rxnav.nlm.nih.gov RxNorm API).
@@ -154,15 +155,15 @@ def main(argv: list[str] | None = None) -> int:
         "",
         "## Logistic Regression (signed coefficient; + pushes toward AD)",
         "",
-        lr.to_markdown(index=False),
+        markdown_table(lr),
         "",
         "## XGBoost (feature importance; unsigned)",
         "",
-        xgb.to_markdown(index=False),
+        markdown_table(xgb),
         "",
         "## Attention (gradient x attention, predicted-positive patients)",
         "",
-        att.to_markdown(index=False),
+        markdown_table(att),
         "",
     ]
     md_path = out_dir / "top_features.md"

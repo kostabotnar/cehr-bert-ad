@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import json
 
-from pipeline.reporting import StepReport
+import pandas as pd
+
+from pipeline.reporting import StepReport, markdown_table
 
 
 def test_all_pass_is_pass_and_exit_zero():
@@ -63,3 +65,13 @@ def test_write_emits_json_and_markdown(tmp_path):
     assert "# My Step" in md
     assert "PASS" in md
     assert "rows" in md
+
+
+def test_markdown_table_renders_header_separator_rows_and_escapes_pipes():
+    df = pd.DataFrame({"rank": [1, 2], "desc": ["a|b", "line\nbreak"], "score": [0.5, 1.25]})
+    assert markdown_table(df).splitlines() == [
+        "| rank | desc | score |",
+        "|---|---|---|",
+        "| 1 | a\\|b | 0.5 |",
+        "| 2 | line break | 1.25 |",
+    ]
