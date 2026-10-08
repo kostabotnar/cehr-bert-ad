@@ -23,7 +23,7 @@ Outputs
 
 Inputs
 ------
-  splits              : data/omop_data/ad_cohort/splits.parquet          (--splits-file)
+  splits              : data/cohort/splits.parquet                   (--splits-file)
   linear probe        : build/<run_label>/linear_probe/{summary.json,<kind>/...}
   baseline <m>        : build/<run_label>/baselines/<m>/{test,validation}_predictions
   CEHR-BERT (optional): build/<run_label>/metrics.json, data/finetune_results/{test,validation}_predictions

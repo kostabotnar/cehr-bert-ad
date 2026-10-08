@@ -36,6 +36,8 @@ def _status(report_dir):
 def test_step02_launch_success(step, omop_dir, tmp_path, monkeypatch):
     mod = step("02_prepare_pretraining_data.py")
     out_folder = tmp_path / "cehrbert_data"
+    staging = out_folder / "omop_input"
+    omop_before = sorted(p.name for p in omop_dir.iterdir())
 
     def make_sequences(cmd, cwd, env):
         seq = out_folder / "patient_sequence"
@@ -46,14 +48,25 @@ def test_step02_launch_success(step, omop_dir, tmp_path, monkeypatch):
     monkeypatch.setattr(mod.launch, "run_command", rec)
 
     rep = tmp_path / "rep02"
-    rc = mod.main([
-        "--input-folder", str(omop_dir),
-        "--output-folder", str(out_folder),
-        "--report-dir", str(rep),
-    ])
+    rc = mod.main(
+        [
+            "--input-folder",
+            str(omop_dir),
+            "--output-folder",
+            str(out_folder),
+            "--staging-dir",
+            str(staging),
+            "--report-dir",
+            str(rep),
+        ]
+    )
     assert rc == 0
     assert _status(rep) == "pass"
     assert len(rec.calls) == 1
+    # The wrapper gets the staging folder, never the OMOP folder, and the OMOP folder stays untouched.
+    assert rec.calls[0]["env"]["INPUT_FOLDER"] == str(staging)
+    assert omop_before == sorted(p.name for p in omop_dir.iterdir())
+    assert (staging / "person").is_symlink() and (staging / "person").resolve() == (omop_dir / "person").resolve()
     # Spark env is passed through to the wrapper.
     assert "SPARK_DRIVER_MEMORY" in rec.calls[0]["env"]
     assert rec.calls[0]["cmd"][0] == "bash"
@@ -67,10 +80,22 @@ def test_step02_preflight_gate_blocks_launch(step, tmp_path, monkeypatch):
     empty = tmp_path / "empty_omop"
     empty.mkdir()
     rep = tmp_path / "rep02b"
-    rc = mod.main(["--input-folder", str(empty), "--output-folder", str(tmp_path / "o"), "--report-dir", str(rep)])
+    rc = mod.main(
+        [
+            "--input-folder",
+            str(empty),
+            "--output-folder",
+            str(tmp_path / "o"),
+            "--staging-dir",
+            str(tmp_path / "stage"),
+            "--report-dir",
+            str(rep),
+        ]
+    )
     assert rc == 1
     assert _status(rep) == "fail"
     assert rec.calls == []  # never launched
+    assert not (tmp_path / "stage").exists()
 
 
 # --- step 04 ---------------------------------------------------------------
@@ -167,7 +192,7 @@ def test_step08_preflight_gate_blocks_launch(step, tmp_path, monkeypatch):
 def test_step09_predict_then_verify_success(step, finetune_config, finetune_results_dir, tmp_path, monkeypatch):
     mod = step("09_predict.py")
     # Point pipeline outputs at fixtures; cohort_test + finetuned model must exist for preflight.
-    cohort_test = tmp_path / "ad_cohort" / "test"
+    cohort_test = tmp_path / "cohort" / "test"
     cohort_test.mkdir(parents=True)
     import polars as pl
 
@@ -177,15 +202,16 @@ def test_step09_predict_then_verify_success(step, finetune_config, finetune_resu
     model_dir = finetune_results_dir
     (model_dir / "config.json").write_text("{}", encoding="utf-8")  # make it look like a model dir
 
-    monkeypatch.setattr(mod.paths, "COHORT_TEST_DIR", cohort_test)
+    monkeypatch.setattr(mod.paths, "CEHRBERT_COHORT_TEST_DIR", cohort_test)
     monkeypatch.setattr(mod.paths, "FINETUNE_RESULTS_DIR", model_dir)
     monkeypatch.setattr(mod.paths, "PREDICT_PREPARED_DIR", tmp_path / "pp")
     rec = CallRecorder(returncode=0)  # predictions already exist in the fixture
     monkeypatch.setattr(mod.launch, "run_command", rec)
 
     rep = tmp_path / "rep09"
-    rc = mod.main(["--finetune-config", str(finetune_config), "--results-dir", str(model_dir),
-                   "--report-dir", str(rep)])
+    rc = mod.main(
+        ["--finetune-config", str(finetune_config), "--results-dir", str(model_dir), "--report-dir", str(rep)]
+    )
     assert rc == 0
     assert len(rec.calls) == 1  # prediction launched
     assert _status(rep) == "pass"
@@ -193,7 +219,7 @@ def test_step09_predict_then_verify_success(step, finetune_config, finetune_resu
 
 def test_step09_preflight_gate_blocks_launch(step, finetune_config, tmp_path, monkeypatch):
     mod = step("09_predict.py")
-    monkeypatch.setattr(mod.paths, "COHORT_TEST_DIR", tmp_path / "no_cohort")
+    monkeypatch.setattr(mod.paths, "CEHRBERT_COHORT_TEST_DIR", tmp_path / "no_cohort")
     monkeypatch.setattr(mod.paths, "FINETUNE_RESULTS_DIR", tmp_path / "no_model")
     rec = CallRecorder(returncode=0)
     monkeypatch.setattr(mod.launch, "run_command", rec)

@@ -25,18 +25,42 @@ def mod(step):
     return step("06_prepare_finetuning_data.py")
 
 
+def ev(person, date, concept=100, visit=1):
+    """An event row; by default it is visit linked with concept 100."""
+    return (person, date, concept, visit)
+
+
 def write_omop(root, persons, visits, ad=(), events=None):
     """Minimal OMOP folder. persons: {id: birth_year}; visits: {id: [dates]}; ad: {id: date};
-    events: {table: [(id, date)]} for drug_exposure, procedure_occurrence, measurement, condition_occurrence."""
-    events = events or {}
+    events: {table: [(id, date) or (id, date, concept, visit_occurrence_id)]} for drug_exposure,
+    procedure_occurrence, measurement, condition_occurrence. A pair gets concept 100 and visit 1."""
+    events = {t: [e if len(e) == 4 else ev(*e) for e in rows] for t, rows in (events or {}).items()}
 
     def write(table, df):
         d = root / table
         d.mkdir(parents=True, exist_ok=True)
         df.write_parquet(d / "data.parquet")
 
+    def frame(rows, date_col, concept_col, source=None):
+        cols = {
+            "person_id": [r[0] for r in rows],
+            date_col: [r[1] for r in rows],
+            concept_col: [r[2] for r in rows],
+            "visit_occurrence_id": [r[3] for r in rows],
+        }
+        schema = {
+            "person_id": pl.Int64,
+            date_col: pl.Date,
+            concept_col: pl.Int64,
+            "visit_occurrence_id": pl.Int64,
+        }
+        if source is not None:
+            cols["condition_source_value"] = source
+            schema["condition_source_value"] = pl.String
+        return pl.DataFrame(cols, schema=schema)
+
     write("person", pl.DataFrame({"person_id": list(persons), "year_of_birth": list(persons.values())}))
-    rows = [(p, d) for p, ds in visits.items() for d in ds]
+    rows = [(p, d) for p, d in ((p, d) for p, ds in visits.items() for d in ds)]
     write(
         "visit_occurrence",
         pl.DataFrame(
@@ -44,33 +68,16 @@ def write_omop(root, persons, visits, ad=(), events=None):
             schema={"person_id": pl.Int64, "visit_start_date": pl.Date},
         ),
     )
-    cond = [(p, AD, d) for p, d in dict(ad).items()] + [
-        (p, "ICD-10-CM:E11.9", d) for p, d in events.get("condition_occurrence", [])
-    ]
-    write(
-        "condition_occurrence",
-        pl.DataFrame(
-            {
-                "person_id": [c[0] for c in cond],
-                "condition_source_value": [c[1] for c in cond],
-                "condition_start_date": [c[2] for c in cond],
-            },
-            schema={"person_id": pl.Int64, "condition_source_value": pl.String, "condition_start_date": pl.Date},
-        ),
-    )
-    for table, col in (
-        ("drug_exposure", "drug_exposure_start_date"),
-        ("procedure_occurrence", "procedure_date"),
-        ("measurement", "measurement_date"),
+    ad_rows = [ev(p, d, 9) for p, d in dict(ad).items()]
+    other = events.get("condition_occurrence", [])
+    source = [AD] * len(ad_rows) + ["ICD-10-CM:E11.9"] * len(other)
+    write("condition_occurrence", frame(ad_rows + other, "condition_start_date", "condition_concept_id", source))
+    for table, date_col, concept_col in (
+        ("drug_exposure", "drug_exposure_start_date", "drug_concept_id"),
+        ("procedure_occurrence", "procedure_date", "procedure_concept_id"),
+        ("measurement", "measurement_date", "measurement_concept_id"),
     ):
-        ev = events.get(table, [])
-        write(
-            table,
-            pl.DataFrame(
-                {"person_id": [e[0] for e in ev], col: [e[1] for e in ev]},
-                schema={"person_id": pl.Int64, col: pl.Date},
-            ),
-        )
+        write(table, frame(events.get(table, []), date_col, concept_col))
 
 
 def candidates(visits, birth=D(1950, 7, 1)):
@@ -237,7 +244,7 @@ def test_event_window_boundaries_for_cases_and_controls(mod, tmp_path):
     }
     write_omop(tmp_path, persons, visits, ad, events)
     report = StepReport("t")
-    cohort = mod.build_cohort(tmp_path, GAP, report)
+    cohort = mod.build_cohort(tmp_path, GAP, report, min_concept_patients=0)
     assert dict(zip(cohort["person_id"], cohort["label"])) == {2: 1, 5: 0}
     m = report.metrics
     assert m["cases_excluded_event"] == 2 and m["cases_remaining"] == 1
@@ -258,6 +265,64 @@ def test_events_in_window_checks_every_event_table(tmp_path):
     assert sorted(ad_cohort.events_in_window(tmp_path, idx, WINDOW).to_list()) == [1, 2, 3, 4]
 
 
+def test_events_without_visit_or_with_concept_zero_do_not_count(tmp_path):
+    persons = {p: 1950 for p in range(1, 6)}
+    day = INDEX - TD(days=1)
+    events = {
+        "drug_exposure": [ev(1, day, visit=None), ev(2, day, concept=0), ev(3, day, concept=None), ev(4, day)],
+        "measurement": [ev(5, day, visit=None)],
+    }
+    write_omop(tmp_path, persons, {p: [D(2012, 1, 1)] for p in persons}, events=events)
+    idx = pl.DataFrame({"person_id": [1, 2, 3, 4, 5], "index_date": [INDEX] * 5})
+    assert ad_cohort.events_in_window(tmp_path, idx, WINDOW).to_list() == [4]
+
+
+def test_qualified_concepts_pool_visit_linked_persons_across_tables(tmp_path):
+    day = INDEX - TD(days=1)
+    events = {
+        # concept 100: persons 1, 2 (drug) and 3 (procedure) -> 3 persons; person 1's repeat counts once
+        "drug_exposure": [ev(1, day), ev(1, day - TD(days=1)), ev(2, day)],
+        "procedure_occurrence": [ev(3, day)],
+        # concept 200: persons 1, 2 visit linked, 3 without a visit -> 2 persons
+        "condition_occurrence": [ev(1, day, 200), ev(2, day, 200), ev(3, day, 200, visit=None)],
+        # concept 0 never counts; measurement rows count even without a date
+        "measurement": [ev(p, day, 0) for p in (1, 2, 3)] + [ev(p, None, 300) for p in (1, 2, 3)],
+    }
+    write_omop(tmp_path, {p: 1950 for p in (1, 2, 3)}, {p: [D(2012, 1, 1)] for p in (1, 2, 3)}, events=events)
+    assert sorted(ad_cohort.qualified_concepts(tmp_path, 3).to_list()) == [100, 300]
+    assert sorted(ad_cohort.qualified_concepts(tmp_path, 2).to_list()) == [100, 200, 300]
+    assert ad_cohort.qualified_concepts(tmp_path, 0) is None
+
+
+def test_event_with_unqualified_concept_does_not_count(tmp_path):
+    day = INDEX - TD(days=1)
+    # Person 1 has only a rare concept in the window, person 2 a common one (shared with persons 3, 4).
+    events = {"drug_exposure": [ev(1, day, 7), ev(2, day, 100), ev(3, day, 100), ev(4, day, 100)]}
+    write_omop(tmp_path, {p: 1950 for p in range(1, 5)}, {p: [D(2012, 1, 1)] for p in range(1, 5)}, events=events)
+    idx = pl.DataFrame({"person_id": [1, 2], "index_date": [INDEX] * 2})
+    qualified = ad_cohort.qualified_concepts(tmp_path, 3)
+    assert ad_cohort.events_in_window(tmp_path, idx, WINDOW, qualified).to_list() == [2]
+    assert sorted(ad_cohort.events_in_window(tmp_path, idx, WINDOW).to_list()) == [1, 2]
+
+
+def test_build_cohort_records_event_rule_exclusions(mod, tmp_path):
+    persons = {p: 1950 for p in range(1, 5)}
+    visits = {1: case_visits(), 2: case_visits(), 3: control_visits(), 4: control_visits()}
+    day = INDEX - TD(days=5)
+    events = {
+        "drug_exposure": [ev(1, day, 100), ev(2, day, 7), ev(3, day, 100, visit=None), ev(4, day, 100)],
+        "procedure_occurrence": [ev(p, D(2015, 1, 1), 100) for p in (1, 2, 3, 4)],
+    }
+    write_omop(tmp_path, persons, visits, ad={1: ANCHOR, 2: ANCHOR}, events=events)
+    report = StepReport("t")
+    cohort = mod.build_cohort(tmp_path, GAP, report, min_concept_patients=3)
+    m = report.metrics
+    assert sorted(cohort["person_id"]) == [1, 4]
+    assert m["min_concept_patients"] == 3 and m["qualified_concepts"] == 1
+    assert m["cases_excluded_event"] == 1 and m["controls_excluded_event"] == 1
+    assert m["excluded_by_event_rule"] == 2
+
+
 # --------------------------------------------------------------------------
 # Anchors, cap and exclusion counts end to end
 # --------------------------------------------------------------------------
@@ -271,10 +336,18 @@ def test_case_anchor_is_first_ad_date_and_index_is_anchor_minus_gap(mod, tmp_pat
         events={"drug_exposure": [(1, INDEX - TD(days=10))], "condition_occurrence": [(1, INDEX - TD(days=20))]},
     )
     # A later AD row must not move the anchor.
-    extra = pl.DataFrame({"person_id": [1], "condition_source_value": [AD], "condition_start_date": [D(2022, 1, 1)]})
+    extra = pl.DataFrame(
+        {
+            "person_id": [1],
+            "visit_occurrence_id": [1],
+            "condition_concept_id": [9],
+            "condition_source_value": [AD],
+            "condition_start_date": [D(2022, 1, 1)],
+        },
+    ).select(pl.read_parquet(tmp_path / "condition_occurrence" / "data.parquet").columns)
     path = tmp_path / "condition_occurrence" / "data.parquet"
     pl.concat([pl.read_parquet(path), extra]).write_parquet(path)
-    cohort = mod.build_cohort(tmp_path, GAP, StepReport("t"))
+    cohort = mod.build_cohort(tmp_path, GAP, StepReport("t"), min_concept_patients=0)
     assert cohort.row(0) == (1, INDEX, 1)
 
 
@@ -292,7 +365,7 @@ def test_capped_target_excludes_late_case_anchors_but_keeps_the_cases(mod, tmp_p
     }
     write_omop(tmp_path, persons, visits, ad={1: ANCHOR, 2: late}, events=events)
     report = StepReport("t")
-    cohort = mod.build_cohort(tmp_path, GAP, report)
+    cohort = mod.build_cohort(tmp_path, GAP, report, min_concept_patients=0)
     m = report.metrics
     assert m["data_cutoff"] == "2023-01-01" and m["target_cap_date"] == "2022-01-01"
     assert m["target_anchor_year_counts"] == {"2020": 1}
@@ -332,7 +405,7 @@ def test_exclusion_counts_per_group(mod, tmp_path):
 
     write_omop(tmp_path, persons, visits, ad, {"drug_exposure": drugs})
     report = StepReport("t")
-    cohort = mod.build_cohort(tmp_path, GAP, report)
+    cohort = mod.build_cohort(tmp_path, GAP, report, min_concept_patients=0)
     m = report.metrics
 
     assert (m["cases_candidates"], m["cases_excluded_age"], m["cases_excluded_index_floor"]) == (6, 1, 1)

@@ -323,5 +323,15 @@ def test_step02_fails_on_all_null_visit_datetimes(step, omop_dir, tmp_path):
     df = pl.read_parquet(vo).with_columns(visit_start_datetime=pl.lit(None, dtype=TS))
     df.write_parquet(vo)
     mod = step("02_prepare_pretraining_data.py")
-    rc = mod.main(["--input-folder", str(omop_dir), "--skip-launch", "--report-dir", str(tmp_path / "rep")])
+    rc = mod.main(
+        [
+            "--input-folder",
+            str(omop_dir),
+            "--staging-dir",
+            str(tmp_path / "stage"),
+            "--skip-launch",
+            "--report-dir",
+            str(tmp_path / "rep"),
+        ]
+    )
     assert rc != 0

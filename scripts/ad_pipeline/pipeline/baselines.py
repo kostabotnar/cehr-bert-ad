@@ -3,10 +3,9 @@
 These baselines predict the *same* AD task as CEHR-BERT and are scored by the *same*
 evaluation code (``pipeline.evaluation`` / ``10_evaluate.py``). To make the comparison
 fair, they reuse the identical patient partition, read from the canonical split file
-written by step 6 (``data/omop_data/ad_cohort/splits.parquet``, one row per patient with
-``split`` in {train, val, test}). Only when that file is missing does
-:func:`recover_splits` fall back to CEHR-BERT's tokenized validation split or a
-deterministic hash split, and it logs a warning when it does.
+written by step 6 (``data/cohort/splits.parquet``, one row per patient with
+``split`` in {train, val, test}). :func:`recover_splits` requires that file and raises
+when it is missing.
 
 CEHR-BERT consumes token sequences; the baselines need a tabular design matrix, which
 this module builds directly from the OMOP source tables, **frozen strictly before each
@@ -60,72 +59,11 @@ DOMAIN_ENCODING: Dict[str, str] = {"cond": "binary", "drug": "count", "proc": "c
 # --------------------------------------------------------------------------- #
 # Cohort / split recovery
 # --------------------------------------------------------------------------- #
-def load_cohort(folder: str | Path) -> pl.DataFrame:
-    """Read a cohort folder (``*.parquet`` with person_id, index_date, label)."""
-    folder = Path(folder)
-    df = pl.read_parquet(str(folder / "*.parquet"))
-    return (
-        df.select(
-            pl.col("person_id").cast(pl.Int64),
-            pl.col("index_date").cast(pl.Date),
-            pl.col("label").cast(pl.Int64),
-        )
-        .unique(subset="person_id")
-        .sort("person_id")
-    )
-
-
-def _val_person_ids_from_prepared(prepared_dir: str | Path) -> List[int]:
-    """Recover the validation patients from CEHR-BERT's tokenized finetune dataset.
-
-    The fine-tuning dataset is saved as a DatasetDict under a hashed subdirectory with
-    ``train`` / ``validation`` splits, each carrying the real OMOP ``person_id``. This is
-    the authoritative record of which patients CEHR-BERT validated on. (The
-    ``validation_predictions`` parquet is *not* usable for this: its ``subject_id`` is a
-    hashed identifier that does not join back to ``person_id``.)
-    """
-    try:
-        from .dataset_checks import datasets_available, resolve_prepared_path
-
-        if not datasets_available():
-            return []
-        resolved = resolve_prepared_path(prepared_dir)
-        if resolved is None:
-            return []
-        from datasets import load_from_disk
-
-        dataset = load_from_disk(resolved)
-        if hasattr(dataset, "keys") and "validation" in dataset and "person_id" in dataset["validation"].column_names:
-            return [int(p) for p in dataset["validation"]["person_id"]]
-    except Exception:  # noqa: BLE001
-        return []
-    return []
-
-
-def _deterministic_val_ids(finetune: pl.DataFrame, val_fraction: float, seed: int) -> List[int]:
-    """Fallback: a deterministic patient-level validation split (same hashing style as step 6)."""
-    import hashlib
-
-    def _bucket(pid: int) -> int:
-        h = hashlib.md5(f"{seed}:{pid}".encode(), usedforsecurity=False).hexdigest()
-        return int(h[:8], 16) % 1_000_000
-
-    threshold = int(val_fraction * 1_000_000)
-    with_bucket = finetune.with_columns(pl.col("person_id").map_elements(_bucket, return_dtype=pl.Int64).alias("_b"))
-    return with_bucket.filter(pl.col("_b") < threshold).get_column("person_id").to_list()
-
-
 @dataclasses.dataclass
 class Splits:
     train: pl.DataFrame
     val: pl.DataFrame
     test: pl.DataFrame
-    # CANONICAL_SPLITS_SOURCE, or when the split file is missing
-    # "cehrbert_prepared_validation_split" / "deterministic_fallback"
-    val_source: str
-
-
-CANONICAL_SPLITS_SOURCE = "canonical_splits_file"
 
 
 def load_canonical_splits(splits_file: str | Path) -> Splits:
@@ -145,45 +83,14 @@ def load_canonical_splits(splits_file: str | Path) -> Splits:
     def _part(name: str) -> pl.DataFrame:
         return df.filter(pl.col("split") == name).drop("split").sort("person_id")
 
-    return Splits(train=_part("train"), val=_part("val"), test=_part("test"), val_source=CANONICAL_SPLITS_SOURCE)
+    return Splits(train=_part("train"), val=_part("val"), test=_part("test"))
 
 
-def recover_splits(
-    finetune_dir: str | Path = paths.COHORT_FINETUNE_DIR,
-    test_dir: str | Path = paths.COHORT_TEST_DIR,
-    prepared_dir: str | Path = paths.FINETUNE_PREPARED_DIR,
-    val_fraction: float = 0.1,
-    seed: int = 42,
-    splits_file: str | Path = paths.COHORT_SPLITS_FILE,
-) -> Splits:
-    """Build the train/val/test cohort frames shared by all baselines.
-
-    The canonical split file from step 6 is used whenever it exists, so every model sees
-    the same partition. Only if it is missing: val patients come from CEHR-BERT's
-    tokenized validation split when available, otherwise from a deterministic 10% split
-    of the finetune cohort.
-    """
-    if Path(splits_file).is_file():
-        return load_canonical_splits(splits_file)
-    logger.warning(
-        "Canonical splits file %s not found; falling back to legacy split recovery. "
-        "Rerun step 6 so all models share one partition.",
-        splits_file,
-    )
-    finetune = load_cohort(finetune_dir)
-    test = load_cohort(test_dir)
-    ft_ids = set(finetune.get_column("person_id").to_list())
-
-    val_ids = [pid for pid in _val_person_ids_from_prepared(prepared_dir) if pid in ft_ids]
-    source = "cehrbert_prepared_validation_split"
-    if not val_ids:
-        val_ids = _deterministic_val_ids(finetune, val_fraction, seed)
-        source = "deterministic_fallback"
-    val_set = set(val_ids)
-
-    val = finetune.filter(pl.col("person_id").is_in(list(val_set))).sort("person_id")
-    train = finetune.filter(~pl.col("person_id").is_in(list(val_set))).sort("person_id")
-    return Splits(train=train, val=val, test=test, val_source=source)
+def recover_splits(splits_file: str | Path = paths.COHORT_SPLITS_FILE) -> Splits:
+    """Train/val/test cohort frames shared by all baselines, from the canonical split file of step 6."""
+    if not Path(splits_file).is_file():
+        raise FileNotFoundError(f"Canonical splits file {splits_file} not found; run step 6 first.")
+    return load_canonical_splits(splits_file)
 
 
 # --------------------------------------------------------------------------- #

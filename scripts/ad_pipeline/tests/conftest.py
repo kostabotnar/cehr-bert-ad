@@ -64,12 +64,26 @@ def omop_dir(tmp_path: Path) -> Path:
             {
                 "person_id": [1, 1, 1, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4, 5, 5, 5, 5, 6, 6],
                 "visit_start_date": [
-                    D(2010, 1, 1), D(2018, 6, 1), D(2023, 1, 1),                # p1
-                    D(2011, 1, 1), D(2018, 12, 1), D(2021, 6, 1),               # p2
-                    D(2012, 1, 1), D(2018, 6, 1), D(2020, 3, 1), D(2022, 6, 1),  # p3
-                    D(2010, 1, 1), D(2018, 9, 1), D(2020, 6, 1), D(2022, 1, 1),  # p4
-                    D(2015, 1, 1), D(2018, 12, 1), D(2020, 5, 1), D(2022, 6, 1),  # p5
-                    D(2016, 1, 1), D(2016, 2, 1),   # p6 (too little history -> excluded)
+                    D(2010, 1, 1),
+                    D(2018, 6, 1),
+                    D(2023, 1, 1),  # p1
+                    D(2011, 1, 1),
+                    D(2018, 12, 1),
+                    D(2021, 6, 1),  # p2
+                    D(2012, 1, 1),
+                    D(2018, 6, 1),
+                    D(2020, 3, 1),
+                    D(2022, 6, 1),  # p3
+                    D(2010, 1, 1),
+                    D(2018, 9, 1),
+                    D(2020, 6, 1),
+                    D(2022, 1, 1),  # p4
+                    D(2015, 1, 1),
+                    D(2018, 12, 1),
+                    D(2020, 5, 1),
+                    D(2022, 6, 1),  # p5
+                    D(2016, 1, 1),
+                    D(2016, 2, 1),  # p6 (too little history -> excluded)
                 ],
             }
         ),
@@ -81,13 +95,16 @@ def omop_dir(tmp_path: Path) -> Path:
         pl.DataFrame(
             {
                 "person_id": [1, 2, 3, 4, 5],
+                "visit_occurrence_id": [1, 1, 1, 1, 1],
                 "condition_concept_id": [3001, 3001, 3002, 3002, 3002],
                 "condition_source_value": [
-                    "ICD-10-CM:G30.9", "ICD-9-CM:331.0", "ICD-10-CM:E11.9", "ICD-10-CM:G31.0", "X-ICD-10-CM:G30",
+                    "ICD-10-CM:G30.9",
+                    "ICD-9-CM:331.0",
+                    "ICD-10-CM:E11.9",
+                    "ICD-10-CM:G31.0",
+                    "X-ICD-10-CM:G30",
                 ],
-                "condition_start_date": [
-                    D(2020, 1, 1), D(2020, 6, 1), D(2019, 1, 1), D(2018, 1, 1), D(2019, 6, 1)
-                ],
+                "condition_start_date": [D(2020, 1, 1), D(2020, 6, 1), D(2019, 1, 1), D(2018, 1, 1), D(2019, 6, 1)],
             }
         ),
     )
@@ -108,6 +125,7 @@ def omop_dir(tmp_path: Path) -> Path:
         pl.DataFrame(
             {
                 "person_id": [1, 2, 5],
+                "visit_occurrence_id": [1, 1, 1],
                 "drug_concept_id": [50, 51, 52],
                 "drug_exposure_start_date": [D(2018, 6, 1), D(2019, 1, 1), D(2019, 1, 1)],
             }
@@ -116,13 +134,23 @@ def omop_dir(tmp_path: Path) -> Path:
     write(
         "procedure_occurrence",
         pl.DataFrame(
-            {"person_id": [1, 3], "procedure_concept_id": [60, 61], "procedure_date": [D(2015, 1, 1), D(2018, 12, 1)]}
+            {
+                "person_id": [1, 3],
+                "visit_occurrence_id": [1, 1],
+                "procedure_concept_id": [60, 61],
+                "procedure_date": [D(2015, 1, 1), D(2018, 12, 1)],
+            }
         ),
     )
     write(
         "measurement",
         pl.DataFrame(
-            {"person_id": [1, 4], "measurement_concept_id": [70, 71], "measurement_date": [D(2016, 1, 1), D(2018, 9, 1)]}
+            {
+                "person_id": [1, 4],
+                "visit_occurrence_id": [1, 1],
+                "measurement_concept_id": [70, 71],
+                "measurement_date": [D(2016, 1, 1), D(2018, 9, 1)],
+            }
         ),
     )
 

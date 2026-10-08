@@ -1,10 +1,13 @@
 #!/usr/bin/env python
 """Step 2: Prepare data for pretraining — generate CEHR-BERT patient sequences.
 
-Preflight-validates the OMOP tables the Spark job needs, then invokes the thin
-``02_generate_pretraining_data.sh`` wrapper (cehrbert_data Spark apps), and finally
-verifies that the patient_sequence output was produced. All validation/reporting is
-here; the bash wrapper only sets Spark env and launches the apps.
+Preflight-validates the OMOP tables the Spark job needs, stages them as symlinks in
+``data/cehrbert_data/omop_input``, then invokes the thin ``02_generate_pretraining_data.sh``
+wrapper (cehrbert_data Spark apps) on that folder, and finally verifies that the
+patient_sequence output was produced. cehrbert_data writes ``processed_measurement`` and
+reads ``qualified_concept_list`` inside its input folder, so the OMOP folder is never passed to
+it and nothing is written there. All validation/reporting is here; the bash wrapper only sets
+Spark env and launches the apps.
 
 Usage:
     python 02_prepare_pretraining_data.py
@@ -20,6 +23,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from pipeline import launch, paths  # noqa: E402
+from pipeline import pretrain_data as pd_  # noqa: E402
 from pipeline.omop_validation import (  # noqa: E402
     add_dataset_checks,
     add_visit_datetime_check,
@@ -33,13 +37,19 @@ WRAPPER = Path(__file__).resolve().parent / "02_generate_pretraining_data.sh"
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Generate pretraining data (preflight + launch + verify)")
-    parser.add_argument("--input-folder", default=str(paths.OMOP_DIR))
+    parser.add_argument("--input-folder", default=str(paths.OMOP_DIR), help="OMOP data folder (read only)")
+    parser.add_argument(
+        "--staging-dir",
+        default=str(paths.CEHRBERT_OMOP_INPUT_DIR),
+        help="Folder of symlinks to the OMOP tables that cehrbert_data uses as its input folder",
+    )
     parser.add_argument("--output-folder", default=str(paths.CEHRBERT_DATA_DIR))
     parser.add_argument("--start-date", default="1952-01-01")
     parser.add_argument("--spark-driver-memory", default="96g")
     parser.add_argument("--spark-executor-memory", default="96g")
-    parser.add_argument("--skip-launch", action="store_true",
-                        help="Run preflight + verification only; do not launch the Spark job")
+    parser.add_argument(
+        "--skip-launch", action="store_true", help="Run preflight + verification only; do not launch the Spark job"
+    )
     parser.add_argument("--report-dir", default=str(paths.report_dir_for("02_prepare_pretraining_data")))
     args = parser.parse_args(argv)
 
@@ -56,6 +66,16 @@ def main(argv: list[str] | None = None) -> int:
         report.note("Preflight failed; not launching Spark job. Fix dataset issues (see steps 1 and 1b).")
         return _finalize(report, args.report_dir)
 
+    # --- stage the OMOP tables as cehrbert_data's input folder ----------------
+    staging_dir = Path(args.staging_dir)
+    try:
+        tables = pd_.stage_omop_input(input_folder, staging_dir)
+    except FileExistsError as exc:
+        report.add_check("OMOP tables staged", False, detail=str(exc))
+        return _finalize(report, args.report_dir)
+    report.add_metric("staging_dir", str(staging_dir))
+    report.add_check("OMOP tables staged", bool(tables), detail=f"{len(tables)} tables linked in {staging_dir}")
+
     # --- launch ------------------------------------------------------------
     if args.skip_launch:
         report.note("Launch skipped (--skip-launch).")
@@ -65,7 +85,7 @@ def main(argv: list[str] | None = None) -> int:
             cwd=paths.PROJECT_ROOT,
             env={
                 "PYTHON": sys.executable,
-                "INPUT_FOLDER": str(input_folder),
+                "INPUT_FOLDER": str(staging_dir),
                 "OUTPUT_FOLDER": str(output_folder),
                 "START_DATE": args.start_date,
                 "SPARK_DRIVER_MEMORY": args.spark_driver_memory,

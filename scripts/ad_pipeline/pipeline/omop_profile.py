@@ -37,7 +37,16 @@ import numpy as np
 import polars as pl
 import yaml
 
-from .omop_validation import table_glob
+from .omop_common import (  # noqa: F401
+    AD_CODE_PATTERNS,
+    AD_SOURCE_REGEX,
+    age_years_expr,
+    birth_date_expr,
+    fit_stratum_weights,
+    is_ad_source_value,
+    scan_table,
+    smd_continuous,
+)
 
 COHORT_AD = "ad"
 COHORT_CONTROL = "control"
@@ -48,10 +57,6 @@ VIEWS = (VIEW_AD, VIEW_LAST, VIEW_MATCHED)
 VIEW_COHORT = {VIEW_AD: COHORT_AD, VIEW_LAST: COHORT_CONTROL, VIEW_MATCHED: COHORT_CONTROL}
 CONTROL_VIEWS = (VIEW_LAST, VIEW_MATCHED)
 
-# Same semantics as step 6 (AD_CODE_PATTERNS / AD_SOURCE_REGEX); duplicated because step scripts are
-# not importable modules.
-AD_CODE_PATTERNS = [r"ICD-9-CM:331\.0", r"ICD-10-CM:G30"]
-AD_SOURCE_REGEX = "^(" + "|".join(AD_CODE_PATTERNS) + ")"
 
 AGE_BAND_YEARS = 5
 MIN_PLAUSIBLE_AGE = 40
@@ -93,31 +98,6 @@ def sample_expr(fraction: float, seed: int) -> pl.Expr | None:
     buckets = 10_000
     threshold = max(1, int(round(fraction * buckets)))
     return (pl.col("person_id").hash(seed=seed) % buckets) < threshold
-
-
-def scan_table(
-    data_dir: Path, table: str, columns: Iterable[str], sample: pl.Expr | None = None
-) -> pl.LazyFrame | None:
-    """Lazy scan of ``columns`` of a table, ``None`` when absent.
-
-    Columns missing from the parquet schema come back as nulls and ``*_date`` columns are cast to
-    ``Date``, so callers can rely on a fixed schema. The person sample filter is applied first.
-    """
-    glob = table_glob(Path(data_dir), table)
-    if glob is None:
-        return None
-    lf = pl.scan_parquet(glob)
-    have = set(lf.collect_schema().names())
-    cols = list(columns)
-    if sample is not None and "person_id" in have:
-        lf = lf.filter(sample)
-    exprs = []
-    for c in cols:
-        e = pl.col(c) if c in have else pl.lit(None, dtype=pl.Int64).alias(c)
-        if c.endswith("_date"):
-            e = e.cast(pl.Date)
-        exprs.append(e)
-    return lf.select(exprs)
 
 
 # --------------------------------------------------------------------------
@@ -167,10 +147,6 @@ def regex_items(section: dict[str, dict[str, dict[str, list[str]]]]) -> dict[str
     return out
 
 
-def is_ad_source_value() -> pl.Expr:
-    return pl.col("condition_source_value").str.contains(AD_SOURCE_REGEX)
-
-
 def item_group(item: str) -> str:
     return item.split("__", 1)[0]
 
@@ -200,14 +176,6 @@ def describe(values: Iterable[float] | pl.Series | None) -> dict[str, Any]:
     }
 
 
-def smd_continuous(mean_a: float | None, sd_a: float | None, mean_b: float | None, sd_b: float | None):
-    """``(mean_b - mean_a) / sqrt((sd_a^2 + sd_b^2) / 2)``; ``None`` when undefined."""
-    if None in (mean_a, sd_a, mean_b, sd_b):
-        return None
-    pooled = ((sd_a**2 + sd_b**2) / 2) ** 0.5
-    return 0.0 if pooled == 0 and mean_a == mean_b else (None if pooled == 0 else (mean_b - mean_a) / pooled)
-
-
 def smd_binary(p_a: float | None, p_b: float | None):
     """``(p_b - p_a) / sqrt((p_a(1-p_a) + p_b(1-p_b)) / 2)``; ``None`` when undefined."""
     if p_a is None or p_b is None:
@@ -223,11 +191,6 @@ def share(count: int, total: int) -> float | None:
 # --------------------------------------------------------------------------
 # Persons, cohorts and index dates
 # --------------------------------------------------------------------------
-def birth_date_expr() -> pl.Expr:
-    """Birth date from year/month/day of birth; missing month defaults to 7, missing day to 1."""
-    month = pl.col("month_of_birth").fill_null(7).clip(1, 12)
-    day = pl.col("day_of_birth").fill_null(1).clip(1, 28)
-    return pl.when(pl.col("year_of_birth").is_not_null()).then(pl.date(pl.col("year_of_birth"), month, day))
 
 
 def load_persons(person: pl.LazyFrame, death: pl.LazyFrame | None, obs_period: pl.LazyFrame | None) -> pl.DataFrame:
@@ -309,45 +272,8 @@ def assign_cohort(persons: pl.DataFrame, ad_first: pl.DataFrame) -> pl.DataFrame
     )
 
 
-def age_years_expr(index_col: str = "index_date", birth_col: str = "birth_date") -> pl.Expr:
-    return (pl.col(index_col) - pl.col(birth_col)).dt.total_days() / 365.25
-
-
 def age_band_expr(age: pl.Expr, width: int = AGE_BAND_YEARS) -> pl.Expr:
     return (age / width).floor().cast(pl.Int64) * width
-
-
-def _fit_stratum_weights(cand: pl.DataFrame, strata: pl.DataFrame, n_iter: int = 20) -> pl.DataFrame:
-    """Per-stratum sampling weights ``w`` by iterative proportional fitting.
-
-    Each control picks one of its candidate visits with probability proportional to ``w`` of the
-    candidate's stratum. Starting from the case counts, ``w`` is rescaled so the expected number of
-    pseudo-indexes per stratum approaches the case distribution (scaled to the number of controls).
-    Strata no control can reach keep their last weight.
-    """
-    per_person = cand.group_by("person_id", "band", "year").agg(pl.len().alias("k"))
-    n_controls = per_person["person_id"].n_unique()
-    w = strata.with_columns(
-        pl.col("n_case").cast(pl.Float64).alias("w"),
-        (pl.col("n_case") / pl.col("n_case").sum() * n_controls).alias("target"),
-    )
-    for _ in range(n_iter):
-        j = per_person.join(w.select("band", "year", "w"), on=["band", "year"], how="left").with_columns(
-            (pl.col("k") * pl.col("w").fill_null(0.0)).alias("kw")
-        )
-        j = j.with_columns((pl.col("kw") / pl.col("kw").sum().over("person_id")).alias("p"))
-        expected = j.group_by("band", "year").agg(pl.col("p").sum().alias("expected"))
-        w = (
-            w.join(expected, on=["band", "year"], how="left")
-            .with_columns(
-                pl.when(pl.col("expected") > 1e-9)
-                .then(pl.col("w") * pl.col("target") / pl.col("expected"))
-                .otherwise(pl.col("w"))
-                .alias("w")
-            )
-            .drop("expected")
-        )
-    return w.select("band", "year", "w")
 
 
 def pick_matched_index(case_index: pl.DataFrame, control_visits: pl.DataFrame, seed: int) -> tuple[pl.DataFrame, int]:
@@ -371,7 +297,7 @@ def pick_matched_index(case_index: pl.DataFrame, control_visits: pl.DataFrame, s
     )
     if cand.is_empty():
         return pl.DataFrame(schema={"person_id": pl.Int64, "index_date": pl.Date}), 0
-    weights = _fit_stratum_weights(cand, strata)
+    weights = fit_stratum_weights(cand, strata)
     cand = cand.join(weights, on=["band", "year"], how="left").with_columns(pl.col("w").fill_null(0.0))
     has_weight = cand.group_by("person_id").agg((pl.col("w").sum() > 0).alias("has_w"))
     cand = cand.join(has_weight, on="person_id").with_columns(

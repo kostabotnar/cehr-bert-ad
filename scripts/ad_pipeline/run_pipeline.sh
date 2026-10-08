@@ -5,9 +5,9 @@
 # its own report under reports/<step>/ (steps 10 onward under build/<run_label>/reports/);
 # this script also writes reports/summary.md.
 #
-# Execution order (not numeric: the cohort and its test split are built before pretraining so
-# the test patients can be kept out of it):
-#   00 01 01b 02 06 03b 03 04 05 05b 07 08 09 10a 10 11 12 14_attention 14_tokens 15 16 13
+# Execution order (not numeric: the cohort and its test split are built from the OMOP tables
+# before pretraining so the test patients can be kept out of it):
+#   00 01 01b 06 02 02b 03b 03 04 05 05b 07 08 09 10a 10 11 12 14_attention 14_tokens 15 16 13
 # Step 13 runs last because it compares the outputs of steps 10, 12 and 16.
 #
 # Usage:
@@ -62,8 +62,9 @@ declare -a STEPS=(
     "00:${PY} 00_check_environment.py"
     "01:${PY} 01_validate_dataset.py ${LINK_ARG}"
     "01b:${PY} 01b_fill_datetimes.py"
-    "02:${PY} 02_prepare_pretraining_data.py"
     "06:${PY} 06_prepare_finetuning_data.py"
+    "02:${PY} 02_prepare_pretraining_data.py"
+    "02b:${PY} 02b_prepare_cohort_folders.py"
     "03b:${PY} 03b_build_pretraining_input.py"
     "03:${PY} 03_evaluate_pretrain_config.py"
     "04:${PY} 04_pretrain.py ${CTX_ARG}"

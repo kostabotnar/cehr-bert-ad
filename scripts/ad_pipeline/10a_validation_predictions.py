@@ -2,7 +2,7 @@
 """Step 10a: Per-sample predictions on the fine-tuning VALIDATION split.
 
 This step scores the *validation* split that the fine-tuning runner created internally
-(train/validation split of ``ad_cohort/finetune``), using the model fine-tuned in step 8.
+(train/validation split of ``data/cehrbert_data/cohort/finetune``), using the model fine-tuned in step 8.
 Downstream evaluation (step 10) uses these per-sample validation probabilities to select
 an UNBIASED operating threshold -- one chosen on data the model was tuned/early-stopped on
 but never scored at the patient level, and crucially NOT on the held-out test set. Picking a
@@ -112,9 +112,7 @@ def _resolve_prepared_ds_path(data_args, model_args, report: StepReport):
     candidates = [p for p in sorted(Path(base).glob("*")) if (p / "validation").is_dir()]
     if len(candidates) == 1:
         chosen = candidates[0]
-        report.note(
-            f"Hash path did not resolve; using single prepared dir with a validation split: {chosen}"
-        )
+        report.note(f"Hash path did not resolve; using single prepared dir with a validation split: {chosen}")
         report.add_check("prepared dataset path resolved (glob fallback)", True, detail=str(chosen))
         return chosen
 
@@ -361,29 +359,32 @@ def _add_output_checks(report: StepReport, val_prediction_folder: Path, results_
 def main(argv: list[str] | None = None) -> int:
     # Parse THIS script's args with a dedicated parser FIRST, before we touch sys.argv for
     # cehrbert's own (single-yaml-path) parser.
-    parser = argparse.ArgumentParser(
-        description="Generate per-sample predictions on the fine-tuning validation split"
-    )
+    parser = argparse.ArgumentParser(description="Generate per-sample predictions on the fine-tuning validation split")
     parser.add_argument("--finetune-config", default=str(paths.FINETUNE_CONFIG))
     parser.add_argument(
         "--results-dir",
         default=str(paths.FINETUNE_RESULTS_DIR),
         help="Where validation predictions/metrics are written (must match the derived output_dir)",
     )
-    parser.add_argument("--window-days", type=int, default=paths.DEFAULT_WINDOW_DAYS,
-                        help="Look-back window in days for the run label (negative = all history).")
-    parser.add_argument("--ctx", type=int, default=paths.DEFAULT_CTX,
-                        help="Token context for the run label.")
-    parser.add_argument("--report-dir", default=None,
-                        help="Override report dir; defaults to build/<run_label>/reports/10a_validation_predictions.")
+    parser.add_argument(
+        "--window-days",
+        type=int,
+        default=paths.DEFAULT_WINDOW_DAYS,
+        help="Look-back window in days for the run label (negative = all history).",
+    )
+    parser.add_argument("--ctx", type=int, default=paths.DEFAULT_CTX, help="Token context for the run label.")
+    parser.add_argument(
+        "--report-dir",
+        default=None,
+        help="Override report dir; defaults to build/<run_label>/reports/10a_validation_predictions.",
+    )
     args = parser.parse_args(argv)
 
     # Build report nests under build/<run_label>/; an explicit override still wins.
     # (validation_predictions themselves stay under data/finetune_results -- unchanged.)
     label = paths.run_label(args.window_days, args.ctx)
     report_dir = (
-        Path(args.report_dir) if args.report_dir
-        else paths.build_report_dir_for("10a_validation_predictions", label)
+        Path(args.report_dir) if args.report_dir else paths.build_report_dir_for("10a_validation_predictions", label)
     )
 
     report = StepReport(

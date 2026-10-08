@@ -7,15 +7,17 @@ does its work, and writes a result report (`reports/<step>/status.json` +
 and the orchestrator halts.
 
 Steps in execution order. The order is not numeric: the cohort and its held-out test split
-(step 06) are built before pretraining, so the test patients are kept out of pretraining
-entirely (step 03b), and every patient is tokenized again after pretraining (step 05b).
+(step 06) are built from the OMOP tables alone, before pretraining, so the test patients are kept
+out of pretraining entirely (step 03b), and every patient is tokenized again after pretraining
+(step 05b).
 
 ```
 00  check environment          (deps / GPU / Java, advisory)
 01  validate dataset           verify required OMOP tables/columns exist
 01b fill datetimes             fill null OMOP *_datetime columns from *_date columns
+06  prepare finetuning data    labeled AD cohort + canonical train/val/test split (OMOP only)
 02  prepare pretraining data   generate CEHR-BERT patient sequences (Spark)
-06  prepare finetuning data    labeled AD cohort + canonical train/val/test split
+02b prepare cohort folders     CEHR-BERT finetune/test cohort folders from the splits
 03b build pretraining input    patient_sequence minus the test patients
 03  evaluate pretrain config   dry-run validate the pretraining config
 04  pretrain model             train CEHR-BERT (refuses test patients and stale artifacts)
@@ -41,6 +43,7 @@ scripts/ad_pipeline/
 ├── run_pipeline.sh                 orchestrator (runs every step in order, halts on first failure)
 ├── 00_check_environment.py         01_validate_dataset.py         01b_fill_datetimes.py
 ├── 02_prepare_pretraining_data.py  + 02_generate_pretraining_data.sh   (Spark wrapper)
+├── 02b_prepare_cohort_folders.py
 ├── 03_evaluate_pretrain_config.py  03b_build_pretraining_input.py
 ├── 04_pretrain.py                  + 04_pretrain.sh                     (runner wrapper)
 ├── 05_verify_pretraining.py        05b_tokenize_full_dataset.py
@@ -74,8 +77,13 @@ your_omop_data/
 └── measurement/             (recommended)
 ```
 
-The cohort (step 6) is built automatically from these tables; you do **not** supply a
-cohort file. AD cases are identified from source ICD codes in `concept.concept_code`
+The cohort (step 6) is built automatically from these tables and from nothing else (no
+CEHR-BERT output); you do **not** supply a cohort file. Nothing from the CEHR-BERT steps is ever
+written into this folder: step 2 gives cehrbert_data a folder of symlinks to the tables
+(`data/cehrbert_data/omop_input`) as its input folder instead.
+cehrbert_data caches its measurement events in `omop_input/processed_measurement` and reuses them on
+the next run, so delete that folder when the OMOP data changes. Folders from earlier runs that sit in
+the OMOP folder (`processed_measurement`, `qualified_concept_list`, `ad_cohort`) are no longer used and can be removed. AD cases are identified from source ICD codes in `concept.concept_code`
 (`ICD-9-CM:331.0`, `ICD-10-CM:G30*`).
 
 Cohort definition (step 6, `pipeline/ad_cohort.py`): a case is anchored at its first AD
@@ -86,7 +94,14 @@ anchor years follow the case anchor years, limited to anchors up to the data cut
 date stay in the cohort. Index = anchor minus `--gap-days`. Both groups must satisfy, at the
 index: age at least `--min-age`, index on or after `--index-floor`, first visit at least
 `--window-days` earlier, and one condition, drug, procedure or measurement in the window
-`[index - window, index)`. The step report lists exclusion counts per group.
+`[index - window, index)`. An event counts only when it would become a CEHR-BERT sequence token: its
+`visit_occurrence_id` is not null and its standard concept id (`condition_concept_id`,
+`drug_concept_id`, `procedure_concept_id`, `measurement_concept_id`) is not 0 and is used by at least
+`--min-concept-patients` (default 100, 0 turns the concept part off) distinct persons, counted over the
+visit-linked events of the four tables together. This mirrors `generate_included_concept_list`
+(`--min_num_of_patients 100`) and `extract_events_by_domain` of cehrbert_data, so cohort patients do not
+end up without a sequence. The step report lists exclusion counts per group, the number of qualified
+concepts and the number of persons excluded by the event rule.
 
 ## Quick start
 
@@ -100,8 +115,9 @@ bash run_pipeline.sh --link /path/to/your/omop_data
 python 00_check_environment.py
 python 01_validate_dataset.py --link /path/to/your/omop_data
 python 01b_fill_datetimes.py
+python 06_prepare_finetuning_data.py             # cohort + splits.parquet (OMOP tables only)
 python 02_prepare_pretraining_data.py            # Spark; set SPARK_DRIVER_MEMORY as needed
-python 06_prepare_finetuning_data.py             # cohort + splits.parquet (needs only step 2)
+python 02b_prepare_cohort_folders.py             # finetune/test cohort folders; every cohort patient needs a sequence
 python 03b_build_pretraining_input.py            # patient_sequence_pretrain (no test patients)
 python 03_evaluate_pretrain_config.py
 python 04_pretrain.py
@@ -140,17 +156,18 @@ Exit codes: `0` = pass or warn (pipeline may continue), `1` = fail (gating). War
 
 ```
 data/
-├── omop_data -> /path/to/your/data    symlink created by step 1 (--link)
+├── omop_data -> /path/to/your/data    symlink created by step 1 (--link); never written by CEHR-BERT steps
+├── cohort/splits.parquet               person_id, index_date, label, split (train/val/test) (step 6)
+├── cehrbert_data/omop_input/           symlinks to the OMOP tables; cehrbert_data's input folder, where it
+│                                        writes processed_measurement and qualified_concept_list (step 2)
 ├── cehrbert_data/patient_sequence/     patient sequences, all patients        (step 2)
+├── cehrbert_data/cohort/finetune/cohort.parquet   train + val rows         (step 02b)
+├── cehrbert_data/cohort/test/cohort.parquet       held-out test rows       (step 02b)
 ├── cehrbert_data/patient_sequence_pretrain/  same, without test patients    (step 3b)
 ├── pretrain_prepared/<name>_<hash>/    pretraining DatasetDict, no test patients (step 4)
 ├── pretrain_results/                   pretrained model + tokenizer           (step 4)
 ├── full_tokenized/                     all patients tokenized; validation =
 │                                        canonical val, train = the rest        (step 5b)
-├── omop_data/ad_cohort/
-│   ├── finetune/cohort.parquet         fine-tuning cohort (~90%)     (step 6)
-│   ├── test/cohort.parquet             held-out test cohort (~10%)   (step 6)
-│   └── splits.parquet                  canonical train/val/test split (step 6)
 ├── finetune_prepared/                  fine-tuning dataset (train/val)  (step 8)
 ├── predict_prepared/                   test-cohort dataset           (step 9)
 └── finetune_results/
@@ -195,22 +212,24 @@ library skip themselves automatically when it is not installed.
 The held-out **test set is decided once, up front, at the patient level** — not carved out
 during training. This keeps fine-tuning simple and prediction independent:
 
-- **Step 6** splits the labeled cohort into `ad_cohort/finetune/` (~90%) and
-  `ad_cohort/test/` (~10%), split by `person_id` with a fixed seed (no patient appears in
-  both), and writes the canonical `splits.parquet` (train / val / test). Tune with
-  `--test-holdout 0.1 --split-seed 42`. It runs right after step 2: it keeps only patients
-  with a non-empty sequence in `patient_sequence` (`--intersect-with sequences`, the default;
-  `--intersect-with tokenized` uses `data/full_tokenized` instead).
+- **Step 6** splits the labeled cohort into a fine-tuning part (~90%, later train and val) and a
+  test part (~10%), split by `person_id` with a fixed seed (no patient appears in both), and writes
+  the canonical `data/cohort/splits.parquet` (train / val / test). Tune with
+  `--test-holdout 0.1 --split-seed 42`. It reads only the OMOP tables, so the classical baselines
+  (steps 11 and 12) need nothing from CEHR-BERT.
+- **Step 02b** writes the folders the finetune runner reads from the splits: `cohort/finetune`
+  (train + val) and `cohort/test` under `data/cehrbert_data`. It fails, listing up to 20 person_ids,
+  when a cohort patient has no non-empty sequence in `patient_sequence`.
 - **Step 3b** removes every test patient from the pretraining input, so the pretrained
   encoder never sees them (neither in its train nor its validation split). Step 4 refuses an
   input that still holds a test patient, and step 5 checks the prepared dataset again.
 - **Step 5b** tokenizes every patient with the pretrained tokenizer into `data/full_tokenized`,
   which fine-tuning, prediction and the linear probe read (`tokenized_full_dataset_path`).
   Its `validation` split is the canonical val split, so step 8 validates on exactly that.
-- **Step 8** fine-tunes on `ad_cohort/finetune/` with `do_predict: false`. The train/validation
+- **Step 8** fine-tunes on `data/cehrbert_data/cohort/finetune/` with `do_predict: false`. The train/validation
   assignment comes from `data/full_tokenized` (canonical train / val), not from
   `validation_split_percentage`, which this flow does not read.
-- **Step 9** runs prediction on `ad_cohort/test/` with the fine-tuned model
+- **Step 9** runs prediction on `data/cehrbert_data/cohort/test/` with the fine-tuned model
   (`do_train: false, do_predict: true`) and verifies the metrics. Re-runnable on its own.
 
 This relies on one small edit to the vendored runner

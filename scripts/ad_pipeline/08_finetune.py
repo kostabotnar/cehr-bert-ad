@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """Step 8: Fine-tune CEHR-BERT for Alzheimer's Disease prediction.
 
-Fine-tunes on the fine-tuning cohort (``ad_cohort/finetune`` from step 6) with an internal
+Fine-tunes on the fine-tuning cohort (``data/cehrbert_data/cohort/finetune`` from step 02b) with an internal
 train/validation split (``validation_split_percentage``). Prediction is a separate step
 (step 9) on the held-out test cohort, so this step runs with ``do_predict: false`` — no
 test split is needed here, and the run completes in one launch.
@@ -50,13 +50,22 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--skip-launch", action="store_true", help="Run preflight only; do not launch training")
     parser.add_argument("--report-dir", default=str(paths.report_dir_for("08_finetune")))
     parser.add_argument(
-        "--max-position-embeddings", "--ctx", type=int, default=None, dest="max_position_embeddings",
+        "--max-position-embeddings",
+        "--ctx",
+        type=int,
+        default=None,
+        dest="max_position_embeddings",
         help="Override the token context (max_position_embeddings / sample_packing_max_positions); "
-             "default uses the YAML value.")
+        "default uses the YAML value.",
+    )
     parser.add_argument(
-        "--observation-window", type=int, default=None, dest="observation_window",
+        "--observation-window",
+        type=int,
+        default=None,
+        dest="observation_window",
         help="Override the look-back window in days; a negative value means all history. "
-             "Default uses the YAML value.")
+        "Default uses the YAML value.",
+    )
     args = parser.parse_args(argv)
 
     report = StepReport("08_finetune", title="Step 8 — Fine-tune CEHR-BERT")
@@ -71,8 +80,11 @@ def main(argv: list[str] | None = None) -> int:
 
     config = load_yaml(config_path)
     if bool(config.get("do_predict")):
-        report.warn("do_predict is off for fine-tuning", ok=False,
-                    detail="do_predict=true; prediction is a separate step (step 9) on the test cohort")
+        report.warn(
+            "do_predict is off for fine-tuning",
+            ok=False,
+            detail="do_predict=true; prediction is a separate step (step 9) on the test cohort",
+        )
 
     paths.FINETUNE_PREPARED_DIR.mkdir(parents=True, exist_ok=True)
     paths.FINETUNE_RESULTS_DIR.mkdir(parents=True, exist_ok=True)
@@ -97,8 +109,9 @@ def main(argv: list[str] | None = None) -> int:
     if not report.add_check("fine-tuning process succeeded", rc == 0, detail=f"exit code {rc}"):
         return _finalize(report, args.report_dir)
 
-    report.add_check("results directory produced", paths.FINETUNE_RESULTS_DIR.is_dir(),
-                     detail=str(paths.FINETUNE_RESULTS_DIR))
+    report.add_check(
+        "results directory produced", paths.FINETUNE_RESULTS_DIR.is_dir(), detail=str(paths.FINETUNE_RESULTS_DIR)
+    )
     return _finalize(report, args.report_dir)
 
 
