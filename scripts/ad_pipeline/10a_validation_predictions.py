@@ -2,7 +2,7 @@
 """Step 10a: Per-sample predictions on the fine-tuning VALIDATION split.
 
 This step scores the *validation* split that the fine-tuning runner created internally
-(train/validation split of ``ad_cohort/finetune``), using the model fine-tuned in step 8.
+(train/validation split of ``data/cehrbert_data/cohort/finetune``), using the model fine-tuned in step 8.
 Downstream evaluation (step 10) uses these per-sample validation probabilities to select
 an UNBIASED operating threshold -- one chosen on data the model was tuned/early-stopped on
 but never scored at the patient level, and crucially NOT on the held-out test set. Picking a

@@ -2,7 +2,7 @@
 """Step 9: Predict on the held-out test cohort and verify the results.
 
 Runs prediction as a standalone step on the test cohort that step 6 held out
-(``ad_cohort/test``), using the model fine-tuned in step 8. A predict config is derived
+(``data/cehrbert_data/cohort/test``), using the model fine-tuned in step 8. A predict config is derived
 from the fine-tuning config with these overrides:
 
     cohort_folder        -> the held-out test cohort
@@ -66,7 +66,7 @@ def build_predict_config(finetune_cfg: dict) -> dict:
     finetuned_model = str(paths.FINETUNE_RESULTS_DIR)
     cfg.update(
         {
-            "cohort_folder": str(paths.COHORT_TEST_DIR),
+            "cohort_folder": str(paths.CEHRBERT_COHORT_TEST_DIR),
             "model_name_or_path": finetuned_model,
             # tokenizer_name_or_path: keep the fine-tuning value (data/pretrain_results).
             "output_dir": finetuned_model,  # predictions land in data/finetune_results/test_predictions
@@ -83,32 +83,49 @@ def build_predict_config(finetune_cfg: dict) -> dict:
 def _preflight(report: StepReport, predict_cfg: dict) -> bool:
     """Check that the test cohort, fine-tuned model, and tokenizer exist before launching."""
     cohort_dir = Path(paths.resolve_under_root(predict_cfg["cohort_folder"]))
-    ok_cohort = report.add_check("test cohort exists", cohort_dir.is_dir() and any(cohort_dir.glob("*.parquet")),
-                                 detail=str(cohort_dir))
+    ok_cohort = report.add_check(
+        "test cohort exists", cohort_dir.is_dir() and any(cohort_dir.glob("*.parquet")), detail=str(cohort_dir)
+    )
     model_dir = Path(paths.resolve_under_root(predict_cfg["model_name_or_path"]))
-    ok_model = report.add_check("fine-tuned model exists", model_dir.is_dir() and (model_dir / "config.json").is_file(),
-                                detail=str(model_dir))
+    ok_model = report.add_check(
+        "fine-tuned model exists", model_dir.is_dir() and (model_dir / "config.json").is_file(), detail=str(model_dir)
+    )
     tok_dir = Path(paths.resolve_under_root(predict_cfg["tokenizer_name_or_path"]))
-    ok_tok = report.add_check("tokenizer exists", (tok_dir / "tokenizer.json").is_file(),
-                              detail=f"{tok_dir}/tokenizer.json")
+    ok_tok = report.add_check(
+        "tokenizer exists", (tok_dir / "tokenizer.json").is_file(), detail=f"{tok_dir}/tokenizer.json"
+    )
     return ok_cohort and ok_model and ok_tok
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Predict on the held-out test cohort and verify results")
     parser.add_argument("--finetune-config", default=str(paths.FINETUNE_CONFIG))
-    parser.add_argument("--results-dir", default=str(paths.FINETUNE_RESULTS_DIR),
-                        help="Where predictions/metrics are written (must match the predict output_dir)")
-    parser.add_argument("--skip-launch", action="store_true", help="Verify existing predictions only; do not run inference")
+    parser.add_argument(
+        "--results-dir",
+        default=str(paths.FINETUNE_RESULTS_DIR),
+        help="Where predictions/metrics are written (must match the predict output_dir)",
+    )
+    parser.add_argument(
+        "--skip-launch", action="store_true", help="Verify existing predictions only; do not run inference"
+    )
     parser.add_argument("--report-dir", default=str(paths.report_dir_for("09_predict")))
     parser.add_argument(
-        "--max-position-embeddings", "--ctx", type=int, default=None, dest="max_position_embeddings",
+        "--max-position-embeddings",
+        "--ctx",
+        type=int,
+        default=None,
+        dest="max_position_embeddings",
         help="Override the token context (max_position_embeddings / sample_packing_max_positions); "
-             "default uses the YAML value.")
+        "default uses the YAML value.",
+    )
     parser.add_argument(
-        "--observation-window", type=int, default=None, dest="observation_window",
+        "--observation-window",
+        type=int,
+        default=None,
+        dest="observation_window",
         help="Override the look-back window in days; a negative value means all history. "
-             "Default uses the YAML value.")
+        "Default uses the YAML value.",
+    )
     args = parser.parse_args(argv)
 
     report = StepReport("09_predict", title="Step 9 — Predict on held-out test & verify")

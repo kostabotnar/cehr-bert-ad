@@ -3,7 +3,7 @@
 
 Parses ``configs/ad_finetune_config.yaml`` and verifies its upstream dependencies are in
 place: the pretrained model + tokenizer (steps 4/5), the tokenized full dataset
-(step 4), and the labeled cohort (step 6). Also checks value ranges, observation_window,
+(step 4), and the finetune cohort folder (step 02b). Also checks value ranges, observation_window,
 and that do_predict is enabled (required to emit test predictions for step 9).
 
 Usage:

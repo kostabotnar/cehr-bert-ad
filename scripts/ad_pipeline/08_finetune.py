@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """Step 8: Fine-tune CEHR-BERT for Alzheimer's Disease prediction.
 
-Fine-tunes on the fine-tuning cohort (``ad_cohort/finetune`` from step 6) with an internal
+Fine-tunes on the fine-tuning cohort (``data/cehrbert_data/cohort/finetune`` from step 02b) with an internal
 train/validation split (``validation_split_percentage``). Prediction is a separate step
 (step 9) on the held-out test cohort, so this step runs with ``do_predict: false`` — no
 test split is needed here, and the run completes in one launch.

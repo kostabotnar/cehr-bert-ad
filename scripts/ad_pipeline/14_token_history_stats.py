@@ -13,7 +13,7 @@ Profiles two quantities that drive the modeling budget and cohort framing:
 
   (2) Patient history length in days
       - history_days = index_date - first_visit_date, where the cohort
-        (index_date + label) comes from the finetune + test cohort parquet and
+        (index_date + label) comes from the canonical ``splits.parquet`` and
         the first visit per person comes from ``visit_occurrence``.
       Reported overall and split by label (cases vs controls).
 
@@ -123,22 +123,16 @@ def _windowed_token_lengths(prepared_dir: Path) -> dict[str, np.ndarray]:
     return per_split
 
 
-def _load_cohort(report: StepReport) -> pl.DataFrame:
-    """Read finetune + test cohort parquet and concatenate (person_id, index_date, label)."""
-    frames = []
-    for tag, folder in (("finetune", paths.COHORT_FINETUNE_DIR), ("test", paths.COHORT_TEST_DIR)):
-        files = sorted(globmod.glob(str(Path(folder) / "*.parquet")))
-        if not files:
-            continue
-        df = pl.read_parquet(files, columns=["person_id", "index_date", "label"]).with_columns(
-            pl.col("index_date").cast(pl.Date),
-            pl.col("label").cast(pl.Int64),
-        )
-        report.add_metric(f"cohort_{tag}_rows", df.height)
-        frames.append(df)
-    if not frames:
+def _load_cohort(report: StepReport, splits_file: Path) -> pl.DataFrame:
+    """Read the canonical splits file as (person_id, index_date, label)."""
+    if not splits_file.is_file():
         return pl.DataFrame(schema={"person_id": pl.Int64, "index_date": pl.Date, "label": pl.Int64})
-    return pl.concat(frames, how="vertical")
+    df = pl.read_parquet(splits_file, columns=["person_id", "index_date", "label"]).with_columns(
+        pl.col("index_date").cast(pl.Date),
+        pl.col("label").cast(pl.Int64),
+    )
+    report.add_metric("cohort_rows", df.height)
+    return df
 
 
 def _history_days(cohort: pl.DataFrame, data_dir: Path) -> pl.DataFrame:
@@ -213,6 +207,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--data-dir", default=str(paths.OMOP_DIR))
     parser.add_argument("--patient-sequence-dir", default=str(paths.PATIENT_SEQUENCE_DIR))
     parser.add_argument("--prepared-dir", default=str(paths.FINETUNE_PREPARED_DIR))
+    parser.add_argument("--splits-file", default=str(paths.COHORT_SPLITS_FILE))
     parser.add_argument("--results-dir", default=None)
     parser.add_argument("--figures-dir", default=None)
     parser.add_argument("--report-dir", default=None)
@@ -306,7 +301,7 @@ def main(argv: list[str] | None = None) -> int:
             payload["windowed_tokens"] = None
 
     # --- (2) history length in days ---------------------------------------
-    cohort = _load_cohort(report)
+    cohort = _load_cohort(report, Path(args.splits_file))
     history = pl.DataFrame(schema={"person_id": pl.Int64, "label": pl.Int64, "history_days": pl.Int64})
     cohort_ok = cohort.height > 0
     report.add_check("cohort readable", cohort_ok, detail=f"{cohort.height} cohort rows")

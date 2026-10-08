@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import datetime as dt
-import logging
 from pathlib import Path
 
 import polars as pl
@@ -26,12 +25,6 @@ def _cohort(pids, label_fn=lambda p: int(p % 2 == 0), index_date=D(2020, 1, 1)) 
     )
 
 
-def _write_cohort(folder: Path, df: pl.DataFrame) -> Path:
-    folder.mkdir(parents=True, exist_ok=True)
-    df.write_parquet(folder / "cohort.parquet")
-    return folder
-
-
 # --------------------------------------------------------------------------
 # recover_splits
 # --------------------------------------------------------------------------
@@ -45,13 +38,9 @@ def test_recover_splits_reads_canonical_file(tmp_path):
         ]
     )
     table.write_parquet(splits_file)
-    # Legacy cohort folders disagree with the split file; the file must win.
-    finetune_dir = _write_cohort(tmp_path / "finetune", _cohort([1, 2, 3, 4, 5, 6, 9]))
-    test_dir = _write_cohort(tmp_path / "test", _cohort([10]))
 
-    splits = bl.recover_splits(finetune_dir, test_dir, tmp_path / "no_prepared", splits_file=splits_file)
+    splits = bl.recover_splits(splits_file)
 
-    assert splits.val_source == "canonical_splits_file"
     assert splits.train["person_id"].to_list() == [1, 2, 3, 4]
     assert splits.val["person_id"].to_list() == [5, 6]
     assert splits.test["person_id"].to_list() == [7, 8]
@@ -68,21 +57,12 @@ def test_recover_splits_rejects_duplicate_person(tmp_path):
         ]
     ).write_parquet(splits_file)
     with pytest.raises(ValueError, match="more than once"):
-        bl.recover_splits(tmp_path, tmp_path, tmp_path, splits_file=splits_file)
+        bl.recover_splits(splits_file)
 
 
-def test_recover_splits_falls_back_with_warning(tmp_path, caplog):
-    finetune_dir = _write_cohort(tmp_path / "finetune", _cohort(range(1, 201)))
-    test_dir = _write_cohort(tmp_path / "test", _cohort([300, 301]))
-    with caplog.at_level(logging.WARNING, logger="pipeline.baselines"):
-        splits = bl.recover_splits(
-            finetune_dir, test_dir, tmp_path / "no_prepared", splits_file=tmp_path / "missing.parquet"
-        )
-    assert splits.val_source == "deterministic_fallback"
-    assert "missing.parquet" in caplog.text
-    assert splits.train.height + splits.val.height == 200
-    assert 0 < splits.val.height < 60
-    assert splits.test["person_id"].to_list() == [300, 301]
+def test_recover_splits_requires_the_canonical_file(tmp_path):
+    with pytest.raises(FileNotFoundError, match="run step 6"):
+        bl.recover_splits(tmp_path / "missing.parquet")
 
 
 def test_run_label_formats():
@@ -363,7 +343,7 @@ def test_step11_writes_feature_matrices(baseline_run):
         assert X.shape == (n_rows, len(names))
         assert len(pids) == n_rows
     status = json.loads((baseline_run["root"] / "reports" / "11" / "status.json").read_text())
-    assert status["metrics"]["val_split_source"] == "canonical_splits_file"
+    assert status["metrics"]["splits_file"].endswith("splits.parquet")
 
 
 def test_step12_writes_model_outputs(baseline_run):
