@@ -182,3 +182,11 @@ def collect_models(args) -> tuple[list[ManifestModel], list[tuple[bool, str, str
             seen[model.name] = path
             models.append(model)
     return models, findings
+
+
+def primary_first(models: list[ManifestModel]) -> list[ManifestModel]:
+    """Stable order in which, within a family, primary models precede secondary ones; families keep their order."""
+    family_order: dict[str, int] = {}
+    for m in models:
+        family_order.setdefault(m.family, len(family_order))
+    return sorted(models, key=lambda m: (family_order[m.family], m.secondary))

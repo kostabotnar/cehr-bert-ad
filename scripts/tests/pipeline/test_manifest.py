@@ -62,3 +62,18 @@ def test_read_rejects_malformed_files(tmp_path, text):
         mf.read_manifest(path)
     with pytest.raises(mf.ManifestError):
         mf.read_manifest(tmp_path / "absent.json")
+
+
+def test_primary_first_orders_within_family_and_is_otherwise_stable(tmp_path):
+    path = tmp_path / "m.json"
+    mf.upsert_models(
+        path,
+        [
+            mf.make_entry("a", "A", "cehrbert", "x", "y"),
+            mf.make_entry("mean", "M", "probe", "x", "y", secondary=True),
+            mf.make_entry("cls", "C", "probe", "x", "y"),
+            mf.make_entry("lr", "L", "classical", "x", "y"),
+        ],
+    )
+    ordered = mf.primary_first(mf.read_manifest(path))
+    assert [m.name for m in ordered] == ["a", "cls", "mean", "lr"]

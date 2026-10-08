@@ -302,6 +302,7 @@ def main(argv: list[str] | None = None) -> int:
 
     # --- 2. models from the manifests ----------------------------------------
     manifest_models, findings = manifest.collect_models(args)
+    manifest_models = manifest.primary_first(manifest_models)
     for is_failure, check, detail in findings:
         (report.add_check if is_failure else report.warn)(check, ok=False, detail=detail)
     specs = [

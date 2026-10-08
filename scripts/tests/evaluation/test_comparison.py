@@ -186,6 +186,21 @@ def test_step13_passes_and_writes_outputs(step, run_dir):
     assert all(ch not in md for ch in (chr(0x2014), chr(0x2013)))
 
 
+def test_step13_lists_the_primary_probe_before_the_secondary_whatever_the_manifest_order(step, run_dir):
+    path = run_dir / "cehrbert_manifest.json"
+    data = json.loads(path.read_text())
+    for entry in data["models"]:
+        entry["secondary"] = entry["name"] == "linear_probe_cls"
+        kind = entry["name"].removeprefix("linear_probe_")
+        entry["display_label"] = f"Linear probe ({kind}, {'secondary' if entry['secondary'] else 'primary'})"
+    path.write_text(json.dumps(data))
+    assert _run_step01(step, run_dir) == 0
+    assert _run_step13(step, run_dir) == 0
+    rows = json.loads((_out(run_dir) / "comparison.json").read_text())["models"]
+    assert [m["model"] for m in rows][:2] == ["Linear probe (mean, primary)", "Linear probe (cls, secondary)"]
+    assert [m["secondary"] for m in rows][:2] == [False, True]
+
+
 def test_step13_with_one_manifest_compares_only_its_models(step, run_dir):
     assert _run_step01(step, run_dir) == 0
     rc = step("evaluation/02_compare_models.py").main(
