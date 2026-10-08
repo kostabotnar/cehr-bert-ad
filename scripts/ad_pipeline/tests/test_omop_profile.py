@@ -10,6 +10,7 @@ from pathlib import Path
 import polars as pl
 import pytest
 
+from pipeline import omop_common as oc
 from pipeline import omop_profile as op
 
 D = dt.date
@@ -202,7 +203,7 @@ def profile_dir(tmp_path: Path) -> Path:
 
 def _persons(root: Path):
     persons0 = op.load_persons(
-        op.scan_table(
+        oc.scan_table(
             root,
             "person",
             [
@@ -217,12 +218,12 @@ def _persons(root: Path):
                 "care_site_id",
             ],
         ),
-        op.scan_table(root, "death", ["person_id", "death_date"]),
-        op.scan_table(
+        oc.scan_table(root, "death", ["person_id", "death_date"]),
+        oc.scan_table(
             root, "observation_period", ["person_id", "observation_period_start_date", "observation_period_end_date"]
         ),
     )
-    visits = op.scan_table(
+    visits = oc.scan_table(
         root,
         "visit_occurrence",
         [
@@ -236,7 +237,7 @@ def _persons(root: Path):
         ],
     ).collect()
     cond = (
-        op.scan_table(
+        oc.scan_table(
             root,
             "condition_occurrence",
             ["person_id", "condition_start_date", "condition_source_value", "visit_occurrence_id"],
@@ -244,7 +245,7 @@ def _persons(root: Path):
         .rename({"condition_start_date": "date", "condition_source_value": "source"})
         .collect()
     )
-    ad_rows = cond.filter(pl.col("source").str.contains(op.AD_SOURCE_REGEX))
+    ad_rows = cond.filter(pl.col("source").str.contains(oc.AD_SOURCE_REGEX))
     ad_first = op.ad_first_dates(ad_rows)
     persons = op.assign_cohort(persons0, ad_first)
     return persons, visits, op.visit_summary(visits), ad_rows, ad_first
@@ -297,9 +298,9 @@ def test_default_config_loads():
 # --------------------------------------------------------------------------
 def test_smd_continuous_hand_computed():
     # a: mean 10, sd 2; b: mean 12, sd 4 -> 2 / sqrt((4 + 16) / 2) = 2 / sqrt(10)
-    assert op.smd_continuous(10, 2, 12, 4) == pytest.approx(2 / math.sqrt(10))
-    assert op.smd_continuous(10, 0, 10, 0) == 0.0
-    assert op.smd_continuous(None, 1, 1, 1) is None
+    assert oc.smd_continuous(10, 2, 12, 4) == pytest.approx(2 / math.sqrt(10))
+    assert oc.smd_continuous(10, 0, 10, 0) == 0.0
+    assert oc.smd_continuous(None, 1, 1, 1) is None
     d = op.describe([1, 2, 3, 4, 5])
     assert (
         d["mean"] == 3
@@ -453,10 +454,10 @@ def test_event_windows_are_half_open():
 # Clinical items, exclusion flow, outcome validity
 # --------------------------------------------------------------------------
 def test_drug_resolution_uses_ingredient_descendants(profile_dir):
-    concept = op.scan_table(
+    concept = oc.scan_table(
         profile_dir, "concept", ["concept_id", "concept_name", "vocabulary_id", "concept_class_id", "standard_concept"]
     )
-    anc = op.scan_table(profile_dir, "concept_ancestor", ["ancestor_concept_id", "descendant_concept_id"])
+    anc = oc.scan_table(profile_dir, "concept_ancestor", ["ancestor_concept_id", "descendant_concept_id"])
     mapping, unresolved = op.resolve_drug_concepts(concept, anc, {"ad_drugs": ["donepezil", "memantine", "lecanemab"]})
     got = {(r["drug_concept_id"], r["item"]) for r in mapping.iter_rows(named=True)}
     assert got == {

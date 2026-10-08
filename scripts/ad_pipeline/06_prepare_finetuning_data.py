@@ -51,7 +51,7 @@ import polars as pl
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from pipeline import ad_cohort, paths  # noqa: E402
-from pipeline.omop_profile import AD_CODE_PATTERNS, is_ad_source_value  # noqa: E402
+from pipeline.omop_common import AD_CODE_PATTERNS, is_ad_source_value  # noqa: E402
 from pipeline.omop_validation import table_glob  # noqa: E402
 from pipeline.reporting import StepReport  # noqa: E402
 

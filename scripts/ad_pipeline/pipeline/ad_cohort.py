@@ -9,7 +9,7 @@ Anchor and index dates
 
 Controls are drawn in two stages so that their anchor years follow the case anchor years:
 (1) pick an anchor year among the years in which the control has eligible candidates, with per-year
-weights fitted by iterative proportional fitting (``omop_profile._fit_stratum_weights``, one stratum
+weights fitted by iterative proportional fitting (``omop_common.fit_stratum_weights``, one stratum
 per calendar year) so the expected number of control anchors per year approaches the target;
 (2) pick one eligible visit date of that year uniformly. Both draws use one seeded NumPy generator over
 rows sorted by (person, year, date), so the result is deterministic. Controls whose eligible years all
@@ -31,7 +31,7 @@ from pathlib import Path
 import numpy as np
 import polars as pl
 
-from .omop_profile import _fit_stratum_weights, age_years_expr, birth_date_expr, scan_table, smd_continuous
+from .omop_common import age_years_expr, birth_date_expr, fit_stratum_weights, scan_table, smd_continuous
 
 EVENT_TABLES = (
     ("condition_occurrence", "condition_start_date"),
@@ -194,7 +194,7 @@ def draw_control_anchors(
         .sort("person_id", "year")
         .with_columns(pl.lit(_BAND).alias("band"))
     )
-    weights = _fit_stratum_weights(person_year, target.with_columns(pl.lit(_BAND).alias("band")))
+    weights = fit_stratum_weights(person_year, target.with_columns(pl.lit(_BAND).alias("band")))
     person_year = person_year.join(weights.select("year", "w"), on="year")
 
     rng = np.random.default_rng(seed)
