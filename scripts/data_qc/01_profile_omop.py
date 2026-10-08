@@ -13,7 +13,7 @@ Outputs (under build/omop_profile/ by default)
   table1.csv / .md     one row per variable level, SMD of each control view versus AD
   exclusion_flow.csv   sequential candidate exclusions (reported only)
   figures/*.png        case/control overlays (300 dpi)
-  reports/01_profile_omop/{status.json,report.md}
+  scripts/data_qc/reports/01_profile_omop/{status.json,report.md}
 
 Usage
   python data_qc/01_profile_omop.py
@@ -241,7 +241,7 @@ def main(argv: list[str] | None = None) -> int:
     t0 = time.time()
     data_dir = Path(args.data_dir)
     out_dir = Path(args.out_dir)
-    report_dir = Path(args.report_dir) if args.report_dir else paths.report_dir_for(STEP)
+    report_dir = Path(args.report_dir) if args.report_dir else paths.report_dir_for("data_qc", STEP)
     skip = {s.strip() for s in args.skip_sections.split(",") if s.strip()}
     unknown = skip - set(SECTIONS) - set(EXTRA_SKIPS)
     if unknown:
