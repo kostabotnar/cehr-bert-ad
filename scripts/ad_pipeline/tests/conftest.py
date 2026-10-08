@@ -54,19 +54,21 @@ def omop_dir(tmp_path: Path) -> Path:
         df.write_parquet(d / "data.parquet")
 
     D = dt.date
-    write("person", pl.DataFrame({"person_id": [1, 2, 3, 4, 5, 6]}))
+    write("person", pl.DataFrame({"person_id": [1, 2, 3, 4, 5, 6], "year_of_birth": [1950] * 6}))
 
+    # Cases p1, p2 (anchors 2020, indexes 2019). Controls p3..p5 each have exactly one eligible anchor in 2020;
+    # p6 has no eligible anchor. The data cutoff is the latest visit (2023-01-01, p1), so the cap is 2022-01-01.
     write(
         "visit_occurrence",
         pl.DataFrame(
             {
-                "person_id": [1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6],
+                "person_id": [1, 1, 1, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4, 5, 5, 5, 5, 6, 6],
                 "visit_start_date": [
-                    D(2010, 1, 1), D(2021, 1, 1),   # p1
-                    D(2011, 1, 1), D(2021, 6, 1),   # p2
-                    D(2012, 1, 1), D(2020, 1, 1),   # p3
-                    D(2010, 1, 1), D(2022, 1, 1),   # p4
-                    D(2015, 1, 1), D(2022, 6, 1),   # p5
+                    D(2010, 1, 1), D(2018, 6, 1), D(2023, 1, 1),                # p1
+                    D(2011, 1, 1), D(2018, 12, 1), D(2021, 6, 1),               # p2
+                    D(2012, 1, 1), D(2018, 6, 1), D(2020, 3, 1), D(2022, 6, 1),  # p3
+                    D(2010, 1, 1), D(2018, 9, 1), D(2020, 6, 1), D(2022, 1, 1),  # p4
+                    D(2015, 1, 1), D(2018, 12, 1), D(2020, 5, 1), D(2022, 6, 1),  # p5
                     D(2016, 1, 1), D(2016, 2, 1),   # p6 (too little history -> excluded)
                 ],
             }
@@ -101,9 +103,28 @@ def omop_dir(tmp_path: Path) -> Path:
         ),
     )
 
-    write("drug_exposure", pl.DataFrame({"person_id": [1, 2], "drug_concept_id": [50, 51]}))
-    write("procedure_occurrence", pl.DataFrame({"person_id": [1, 3], "procedure_concept_id": [60, 61]}))
-    write("measurement", pl.DataFrame({"person_id": [1, 4], "measurement_concept_id": [70, 71]}))
+    write(
+        "drug_exposure",
+        pl.DataFrame(
+            {
+                "person_id": [1, 2, 5],
+                "drug_concept_id": [50, 51, 52],
+                "drug_exposure_start_date": [D(2018, 6, 1), D(2019, 1, 1), D(2019, 1, 1)],
+            }
+        ),
+    )
+    write(
+        "procedure_occurrence",
+        pl.DataFrame(
+            {"person_id": [1, 3], "procedure_concept_id": [60, 61], "procedure_date": [D(2015, 1, 1), D(2018, 12, 1)]}
+        ),
+    )
+    write(
+        "measurement",
+        pl.DataFrame(
+            {"person_id": [1, 4], "measurement_concept_id": [70, 71], "measurement_date": [D(2016, 1, 1), D(2018, 9, 1)]}
+        ),
+    )
 
     return root
 

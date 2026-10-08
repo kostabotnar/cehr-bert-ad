@@ -9,11 +9,16 @@ runner expects:
     label      (int)   1 = develops Alzheimer's after index_date, 0 = control
 
 Task framing ("predict AD anytime in the future"):
-  * Cases (label=1): patients with >=1 Alzheimer's diagnosis. index_date is set GAP days
-    BEFORE the first AD diagnosis, giving the model a real lead time.
-  * Controls (label=0): no AD diagnosis. index_date = last visit minus GAP days.
-  * Inclusion: every patient needs >= MIN_HISTORY days of record (and a visit) before
-    index_date, matching observation_window in ad_finetune_config.yaml.
+  * Cases (label=1): patients with >=1 Alzheimer's diagnosis. Anchor = first AD diagnosis,
+    index_date = anchor minus GAP days, giving the model a real lead time.
+  * Controls (label=0): no AD diagnosis and >=1 visit. Anchor = one of the control's own visit
+    dates, with >= --control-followup-days of observation after it. The anchor year is drawn so
+    control anchor years follow the case anchor years (capped at cutoff minus follow-up).
+    index_date = anchor minus GAP days.
+  * Inclusion, identical for both groups at index_date: age >= --min-age, index_date >=
+    --index-floor, first visit <= index_date minus --window-days, and >= 1 condition, drug,
+    procedure or measurement in [index_date - window, index_date).
+  See pipeline/ad_cohort.py for the exact definitions.
 
 AD is identified from condition_occurrence.condition_source_value, which holds strings
 like "ICD-10-CM:G30.9". condition_concept_id holds standard SNOMED ids, and the concept
@@ -36,6 +41,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import datetime as dt
 import hashlib
 import sys
 from pathlib import Path
@@ -44,19 +50,10 @@ import polars as pl
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from pipeline import paths  # noqa: E402
+from pipeline import ad_cohort, paths  # noqa: E402
+from pipeline.omop_profile import AD_CODE_PATTERNS, is_ad_source_value  # noqa: E402
 from pipeline.omop_validation import table_glob  # noqa: E402
 from pipeline.reporting import StepReport  # noqa: E402
-
-# Source codes for Alzheimer's disease. Matched as a prefix against condition_source_value, so
-# "ICD-10-CM:G30" captures G30.0/G30.1/G30.8/G30.9.
-AD_CODE_PATTERNS = [r"ICD-9-CM:331\.0", r"ICD-10-CM:G30"]
-AD_SOURCE_REGEX = "^(" + "|".join(AD_CODE_PATTERNS) + ")"
-
-
-def is_ad_source_value() -> pl.Expr:
-    return pl.col("condition_source_value").str.contains(AD_SOURCE_REGEX)
-
 
 def _require_glob(data_dir: Path, table: str) -> str:
     glob = table_glob(data_dir, table)
@@ -65,15 +62,29 @@ def _require_glob(data_dir: Path, table: str) -> str:
     return glob
 
 
+EMPTY_COHORT = {"person_id": pl.Int64, "index_date": pl.Date, "label": pl.Int64}
+SMD_WARN = 0.1
+
+
+def _add_counts(report: StepReport, prefix: str, counts: dict[str, int]) -> None:
+    for name, value in counts.items():
+        report.add_metric(f"{prefix}_{name}", value)
+
+
 def build_cohort(
     data_dir: Path,
     gap_days: int,
-    min_history_days: int,
     report: StepReport,
+    window_days: int = 365,
+    min_age: int = 50,
+    index_floor: dt.date = dt.date(2000, 1, 1),
+    followup_days: int = 365,
+    seed: int = 42,
 ) -> pl.DataFrame:
-    """Build the (pre-tokenized-filter) cohort dataframe and record stats on ``report``."""
-    gap = pl.duration(days=gap_days)
+    """Build the (pre-intersection) cohort dataframe and record stats on ``report``.
 
+    See ``pipeline/ad_cohort.py`` for the anchor, index and inclusion definitions.
+    """
     ad_rows = (
         pl.scan_parquet(_require_glob(data_dir, "condition_occurrence"))
         .filter(is_ad_source_value())
@@ -88,43 +99,94 @@ def build_cohort(
         detail=f"{n_rows} rows, {n_patients} patients; patterns={AD_CODE_PATTERNS}",
     )
     if n_rows == 0:
-        return pl.DataFrame(schema={"person_id": pl.Int64, "index_date": pl.Date, "label": pl.Int64})
+        return pl.DataFrame(schema=EMPTY_COHORT)
 
-    visits = (
-        pl.scan_parquet(_require_glob(data_dir, "visit_occurrence"))
-        .select("person_id", pl.col("visit_start_date").cast(pl.Date))
-        .group_by("person_id")
-        .agg(first_visit=pl.col("visit_start_date").min(), last_visit=pl.col("visit_start_date").max())
-    )
+    persons = ad_cohort.read_persons(data_dir)
     first_ad = (
         ad_rows.group_by("person_id")
-        .agg(first_ad_date=pl.col("condition_start_date").min())
+        .agg(anchor_date=pl.col("condition_start_date").min())
+        .collect(engine="streaming")
     )
-    persons = pl.scan_parquet(_require_glob(data_dir, "person")).select("person_id")
+    visit_dates = (
+        pl.scan_parquet(_require_glob(data_dir, "visit_occurrence"))
+        .select("person_id", pl.col("visit_start_date").cast(pl.Date).alias("visit_date"))
+        .drop_nulls()
+        .unique()
+        .collect(engine="streaming")
+    )
+    vsum = visit_dates.group_by("person_id").agg(
+        first_visit=pl.col("visit_date").min(), last_visit=pl.col("visit_date").max()
+    )
+    report.add_metric("total_persons", persons.height)
 
-    df = (
-        persons.join(visits, on="person_id", how="left")
-        .join(first_ad, on="person_id", how="left")
-        .with_columns(is_case=pl.col("first_ad_date").is_not_null())
-        .with_columns(
-            index_date=pl.when(pl.col("is_case"))
-            .then(pl.col("first_ad_date") - gap)
-            .otherwise(pl.col("last_visit") - gap),
-            label=pl.col("is_case").cast(pl.Int64),
-        )
-        .with_columns(history_days=(pl.col("index_date") - pl.col("first_visit")).dt.total_days())
-        .collect()
+    release = ad_cohort.read_release_date(data_dir)
+    cutoff = release if release is not None else visit_dates["visit_date"].max()
+    cap_date = cutoff - dt.timedelta(days=followup_days)
+    report.add_metric("data_cutoff", str(cutoff))
+    report.add_metric(
+        "data_cutoff_source", "cdm_source.source_release_date" if release is not None else "max visit date"
     )
-    report.add_metric("total_persons", df.height)
+    report.add_metric("target_cap_date", str(cap_date))
 
-    valid = df.filter(
-        pl.col("index_date").is_not_null()
-        & pl.col("first_visit").is_not_null()
-        & (pl.col("first_visit") < pl.col("index_date"))
-        & (pl.col("history_days") >= min_history_days)
+    # Cases are not capped by the cutoff: recent cases stay in the cohort and only the control target is capped.
+    cases = persons.join(first_ad, on="person_id").join(vsum, on="person_id", how="left")
+    cases = ad_cohort.add_rule_flags(cases, gap_days, window_days, min_age, index_floor)
+    cases, case_counts = ad_cohort.apply_rules(cases, data_dir, window_days)
+    _add_counts(report, "cases", case_counts)
+
+    capped = cases.filter(pl.col("anchor_date") <= cap_date)["anchor_date"]
+    target = ad_cohort.year_counts(capped)
+    report.add_metric("cases_beyond_cap", cases.height - capped.len())
+    report.add_metric("target_anchor_year_counts", {str(y): n for y, n in target.items()})
+
+    controls = persons.join(first_ad.select("person_id"), on="person_id", how="anti")
+    controls_with_visits = controls.join(vsum, on="person_id")
+    report.add_metric("controls_no_ad_persons", controls.height)
+    report.add_metric("controls_no_visits", controls.height - controls_with_visits.height)
+    candidates, cand_counts = ad_cohort.control_candidates(
+        visit_dates.join(controls_with_visits.select("person_id"), on="person_id"),
+        controls_with_visits,
+        gap_days,
+        window_days,
+        min_age,
+        index_floor,
+        followup_days,
     )
-    report.add_metric("excluded_by_filters", df.height - valid.height)
-    return valid.select("person_id", "index_date", "label").sort("person_id")
+    _add_counts(report, "control_candidate_dates", cand_counts)
+    target_df = pl.DataFrame(
+        {"year": list(target), "n_case": list(target.values())}, schema={"year": pl.Int64, "n_case": pl.Int64}
+    )
+    picked, draw_info = ad_cohort.draw_control_anchors(candidates, target_df, seed)
+    report.add_metric("controls_no_eligible_candidate", controls_with_visits.height - draw_info["n_with_candidates"])
+    report.add_metric("controls_zero_target_weight_only", draw_info["n_zero_target"])
+    report.add_metric("controls_drawn", picked.height)
+
+    drawn = ad_cohort.add_rule_flags(
+        picked.join(controls_with_visits, on="person_id"), gap_days, window_days, min_age, index_floor
+    )
+    drawn, control_counts = ad_cohort.apply_rules(drawn, data_dir, window_days)
+    _add_counts(report, "controls", control_counts)
+
+    achieved = ad_cohort.year_counts(drawn["anchor_date"])
+    report.add_metric("achieved_control_anchor_year_counts", {str(y): n for y, n in achieved.items()})
+    smd = ad_cohort.anchor_year_smd(capped, drawn["anchor_date"])
+    report.add_metric("anchor_year_smd", None if smd is None else round(smd, 4))
+    report.warn(
+        f"control anchor years match capped case anchor years (|SMD| <= {SMD_WARN})",
+        ok=smd is not None and abs(smd) <= SMD_WARN,
+        detail=f"SMD={smd}",
+    )
+    for name, df in (("cases", cases), ("controls", drawn)):
+        report.add_metric(f"{name}_mean_age_at_index", round(df["age"].mean(), 2) if df.height else None)
+
+    out = pl.concat(
+        [
+            cases.select("person_id", "index_date", pl.lit(1, dtype=pl.Int64).alias("label")),
+            drawn.select("person_id", "index_date", pl.lit(0, dtype=pl.Int64).alias("label")),
+        ]
+    )
+    report.add_metric("excluded_by_filters", persons.height - out.height)
+    return out.sort("person_id")
 
 
 def restrict_to_tokenized(cohort: pl.DataFrame, prepared_dir: Path, report: StepReport) -> pl.DataFrame:
@@ -237,7 +299,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--val-seed", type=int, default=43,
                         help="Seed for the train/val split; differs from --split-seed so hash orders are independent")
     parser.add_argument("--gap-days", type=int, default=365, help="Lead time between index_date and first AD dx")
-    parser.add_argument("--min-history-days", type=int, default=182, help="Required history before index_date")
+    parser.add_argument("--window-days", type=int, default=365,
+                        help="Observation window before index_date (matches observation_window in the finetune config)")
+    parser.add_argument("--min-age", type=int, default=50, help="Minimum age in years at index_date")
+    parser.add_argument("--index-floor", type=dt.date.fromisoformat, default=dt.date(2000, 1, 1),
+                        help="Earliest allowed index_date (YYYY-MM-DD)")
+    parser.add_argument("--control-followup-days", type=int, default=365,
+                        help="Observation required after a control anchor (last visit >= anchor + this)")
+    parser.add_argument("--seed", type=int, default=42, help="Seed for the control anchor draw")
     parser.add_argument(
         "--intersect-with",
         choices=("sequences", "tokenized", "none"),
@@ -255,10 +324,23 @@ def main(argv: list[str] | None = None) -> int:
     data_dir = Path(args.data_dir).resolve()
     report.add_metric("data_dir", str(data_dir))
     report.add_metric("gap_days", args.gap_days)
-    report.add_metric("min_history_days", args.min_history_days)
+    report.add_metric("window_days", args.window_days)
+    report.add_metric("min_age", args.min_age)
+    report.add_metric("index_floor", str(args.index_floor))
+    report.add_metric("control_followup_days", args.control_followup_days)
+    report.add_metric("seed", args.seed)
 
     try:
-        cohort = build_cohort(data_dir, args.gap_days, args.min_history_days, report)
+        cohort = build_cohort(
+            data_dir,
+            args.gap_days,
+            report,
+            window_days=args.window_days,
+            min_age=args.min_age,
+            index_floor=args.index_floor,
+            followup_days=args.control_followup_days,
+            seed=args.seed,
+        )
     except FileNotFoundError as exc:
         report.add_check("required OMOP tables present", False, detail=str(exc))
         return _finalize(report, args.report_dir)

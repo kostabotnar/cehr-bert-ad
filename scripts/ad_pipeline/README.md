@@ -78,6 +78,16 @@ The cohort (step 6) is built automatically from these tables; you do **not** sup
 cohort file. AD cases are identified from source ICD codes in `concept.concept_code`
 (`ICD-9-CM:331.0`, `ICD-10-CM:G30*`).
 
+Cohort definition (step 6, `pipeline/ad_cohort.py`): a case is anchored at its first AD
+condition date and a control at one of its own visit dates with at least one year of
+observation after it (`--control-followup-days`). The control anchor year is drawn so control
+anchor years follow the case anchor years, limited to anchors up to the data cutoff
+(`cdm_source.source_release_date`, else the last visit) minus the follow-up; cases after that
+date stay in the cohort. Index = anchor minus `--gap-days`. Both groups must satisfy, at the
+index: age at least `--min-age`, index on or after `--index-floor`, first visit at least
+`--window-days` earlier, and one condition, drug, procedure or measurement in the window
+`[index - window, index)`. The step report lists exclusion counts per group.
+
 ## Quick start
 
 ```bash

@@ -223,10 +223,15 @@ def share(count: int, total: int) -> float | None:
 # --------------------------------------------------------------------------
 # Persons, cohorts and index dates
 # --------------------------------------------------------------------------
-def load_persons(person: pl.LazyFrame, death: pl.LazyFrame | None, obs_period: pl.LazyFrame | None) -> pl.DataFrame:
-    """One row per person: demographics, birth_date, death_date and observation period bounds."""
+def birth_date_expr() -> pl.Expr:
+    """Birth date from year/month/day of birth; missing month defaults to 7, missing day to 1."""
     month = pl.col("month_of_birth").fill_null(7).clip(1, 12)
     day = pl.col("day_of_birth").fill_null(1).clip(1, 28)
+    return pl.when(pl.col("year_of_birth").is_not_null()).then(pl.date(pl.col("year_of_birth"), month, day))
+
+
+def load_persons(person: pl.LazyFrame, death: pl.LazyFrame | None, obs_period: pl.LazyFrame | None) -> pl.DataFrame:
+    """One row per person: demographics, birth_date, death_date and observation period bounds."""
     out = person.unique("person_id").select(
         "person_id",
         "gender_concept_id",
@@ -235,9 +240,7 @@ def load_persons(person: pl.LazyFrame, death: pl.LazyFrame | None, obs_period: p
         "location_id",
         "care_site_id",
         pl.col("year_of_birth").alias("birth_year"),
-        pl.when(pl.col("year_of_birth").is_not_null())
-        .then(pl.date(pl.col("year_of_birth"), month, day))
-        .alias("birth_date"),
+        birth_date_expr().alias("birth_date"),
     )
     if death is not None:
         out = out.join(death.group_by("person_id").agg(pl.col("death_date").min()), on="person_id", how="left")
