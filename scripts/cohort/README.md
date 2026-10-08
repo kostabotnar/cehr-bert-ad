@@ -12,7 +12,7 @@ CEHR-BERT output), so every other part uses the same patients.
 
 ```bash
 bash cohort/run.sh
-python cohort/01_build_cohort.py --gap-days 730 --min-concept-patients 0
+python cohort/01_build_cohort.py --gap-days 730
 ```
 
 ## Cohort definition (`pipeline/ad_cohort.py`)
@@ -29,9 +29,9 @@ Both groups must satisfy, at the index: age at least `--min-age`, index on or af
 first visit at least `--window-days` earlier, and one condition, drug, procedure or measurement in
 the window `[index - window, index)`. An event counts only when it would become a CEHR-BERT sequence
 token: its `visit_occurrence_id` is not null and its standard concept id is not 0 and is used by at
-least `--min-concept-patients` (default 100, 0 turns the concept part off) distinct persons, counted
+least `MIN_CONCEPT_PATIENTS` (100, set in `pipeline/omop_common.py`, shared with cehrbert_model step 01) distinct persons, counted
 over the visit-linked events of the four tables together. This mirrors
-`generate_included_concept_list` (`--min_num_of_patients 100`) and `extract_events_by_domain` of
+`generate_included_concept_list` (`--min_num_of_patients` from the same constant) and `extract_events_by_domain` of
 cehrbert_data, so cohort patients do not end up without a sequence. The report lists exclusion
 counts per group, the number of qualified concepts and the persons excluded by the event rule.
 

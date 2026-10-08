@@ -60,14 +60,15 @@ def test_val_seed_changes_val_not_test(mod, cohort):
     assert test_a.equals(test_b)
 
 
-def test_main_writes_only_the_splits_file_and_is_deterministic(mod, omop_dir, tmp_path):
+def test_main_writes_only_the_splits_file_and_is_deterministic(mod, omop_dir, tmp_path, monkeypatch):
+    monkeypatch.setattr(mod, "MIN_CONCEPT_PATIENTS", 1)
+
     def run(tag):
         out = tmp_path / tag / "splits.parquet"
         rc = mod.main(
             [
                 "--data-dir", str(omop_dir),
                 "--splits-output", str(out),
-                "--min-concept-patients", "1",
                 "--report-dir", str(tmp_path / tag / "rep"),
             ]
         )  # fmt: skip

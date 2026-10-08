@@ -24,6 +24,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from pipeline import launch, paths  # noqa: E402
 from pipeline import pretrain_data as pd_  # noqa: E402
+from pipeline.omop_common import MIN_CONCEPT_PATIENTS  # noqa: E402
 from pipeline.omop_validation import (  # noqa: E402
     add_dataset_checks,
     add_visit_datetime_check,
@@ -58,6 +59,7 @@ def main(argv: list[str] | None = None) -> int:
     output_folder = Path(args.output_folder)
     report.add_metric("input_folder", str(input_folder))
     report.add_metric("output_folder", str(output_folder))
+    report.add_metric("min_concept_patients", MIN_CONCEPT_PATIENTS)
 
     # --- preflight: the Spark job reads these OMOP tables ------------------
     add_dataset_checks(report, input_folder, require_concept=True)
@@ -90,6 +92,7 @@ def main(argv: list[str] | None = None) -> int:
                 "INPUT_FOLDER": str(staging_dir),
                 "OUTPUT_FOLDER": str(output_folder),
                 "START_DATE": args.start_date,
+                "MIN_CONCEPT_PATIENTS": str(MIN_CONCEPT_PATIENTS),
                 "SPARK_DRIVER_MEMORY": args.spark_driver_memory,
                 "SPARK_EXECUTOR_MEMORY": args.spark_executor_memory,
             },

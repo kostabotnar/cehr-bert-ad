@@ -8,9 +8,13 @@ mocked-successful launch the step verifies outputs and reports success.
 from __future__ import annotations
 
 import json
+import os
+import subprocess
+from pathlib import Path
 
 import pandas as pd
 import yaml
+from pipeline.omop_common import MIN_CONCEPT_PATIENTS
 
 
 class CallRecorder:
@@ -26,6 +30,10 @@ class CallRecorder:
         if self.side_effect:
             self.side_effect(cmd, cwd, env)
         return self.returncode
+
+
+def _metrics(report_dir):
+    return json.loads((report_dir / "status.json").read_text(encoding="utf-8"))["metrics"]
 
 
 def _status(report_dir):
@@ -70,6 +78,28 @@ def test_step02_launch_success(step, omop_dir, tmp_path, monkeypatch):
     # Spark env is passed through to the wrapper.
     assert "SPARK_DRIVER_MEMORY" in rec.calls[0]["env"]
     assert rec.calls[0]["cmd"][0] == "bash"
+    assert rec.calls[0]["env"]["MIN_CONCEPT_PATIENTS"] == str(MIN_CONCEPT_PATIENTS)
+    assert _metrics(rep)["min_concept_patients"] == MIN_CONCEPT_PATIENTS
+
+
+def test_step01_wrapper_fails_without_min_concept_patients(tmp_path):
+    marker = tmp_path / "called"
+    fake_python = tmp_path / "fake_python"
+    fake_python.write_text(f"#!/bin/bash\ntouch {marker}\n")
+    fake_python.chmod(0o755)
+    wrapper = Path(__file__).resolve().parents[2] / "cehrbert_model" / "01_generate_sequences.sh"
+    env = {k: v for k, v in os.environ.items() if k != "MIN_CONCEPT_PATIENTS"}
+    env.update(
+        {"PYTHON": str(fake_python), "OUTPUT_FOLDER": str(tmp_path / "out"), "INPUT_FOLDER": str(tmp_path / "in")}
+    )
+    for value in (None, ""):
+        if value is not None:
+            env["MIN_CONCEPT_PATIENTS"] = value
+        proc = subprocess.run(["bash", str(wrapper)], env=env, capture_output=True, text=True)
+        assert proc.returncode != 0
+        assert "MIN_CONCEPT_PATIENTS" in proc.stderr
+    assert not marker.exists()
+    assert not (tmp_path / "out").exists()
 
 
 def test_step02_preflight_gate_blocks_launch(step, tmp_path, monkeypatch):

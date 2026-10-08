@@ -6,7 +6,8 @@
 #
 #     python cehrbert_model/01_generate_sequences.py
 #
-# Running this script directly is supported for debugging the Spark step in isolation.
+# Running this script directly is supported for debugging the Spark step in isolation; it then needs
+# MIN_CONCEPT_PATIENTS set (the value lives in pipeline/omop_common.py).
 
 set -e
 
@@ -18,6 +19,12 @@ PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 INPUT_FOLDER="${INPUT_FOLDER:-${PROJECT_ROOT}/data/cehrbert_data/omop_input}"
 OUTPUT_FOLDER="${OUTPUT_FOLDER:-${PROJECT_ROOT}/data/cehrbert_data}"
 START_DATE="${START_DATE:-1952-01-01}"
+
+if [ -z "${MIN_CONCEPT_PATIENTS:-}" ]; then
+    echo "ERROR: MIN_CONCEPT_PATIENTS is not set. Run cehrbert_model/01_generate_sequences.py, or export it" >&2
+    echo "       (value: MIN_CONCEPT_PATIENTS in scripts/pipeline/omop_common.py)." >&2
+    exit 1
+fi
 
 # Spark memory/parallelism (override via environment).
 export SPARK_WORKER_INSTANCES="${SPARK_WORKER_INSTANCES:-1}"
@@ -43,6 +50,7 @@ echo "Project root : ${PROJECT_ROOT}"
 echo "Input folder : ${INPUT_FOLDER}"
 echo "Output folder: ${OUTPUT_FOLDER}"
 echo "Start date   : ${START_DATE}"
+echo "Min patients per concept: ${MIN_CONCEPT_PATIENTS}"
 echo "Spark driver/executor memory: ${SPARK_DRIVER_MEMORY}/${SPARK_EXECUTOR_MEMORY}"
 echo ""
 
@@ -53,7 +61,7 @@ echo "Generating concept list..."
 "${PYTHON}" -u -m cehrbert_data.apps.generate_included_concept_list \
     -i "${INPUT_FOLDER}" \
     -o "${OUTPUT_FOLDER}" \
-    --min_num_of_patients 100 \
+    --min_num_of_patients "${MIN_CONCEPT_PATIENTS}" \
     --ehr_table_list condition_occurrence procedure_occurrence drug_exposure measurement
 
 # Symlink so training-data generation finds qualified_concept_list (in the staging folder, not the OMOP data).
