@@ -1,4 +1,4 @@
-"""Step 02 (model comparison) with synthetic predictions, and the parity check behind it."""
+"""Evaluation steps 01 and 02 on synthetic predictions described by manifests, and the parity check behind 02."""
 
 from __future__ import annotations
 
@@ -12,15 +12,18 @@ import polars as pl
 import pytest
 
 from pipeline import comparison as cmp
+from pipeline import manifest as mf
+from pipeline import paths
 from pipeline.baseline_predictions import write_predictions
 
 INDEX = dt.date(2020, 1, 1)
 SPLIT_IDS = {"train": range(1, 61), "val": range(61, 81), "test": range(81, 101)}
+# name -> (display label, secondary, family)
 MODELS = {
-    "lr": "baselines/lr",
-    "xgboost": "baselines/xgboost",
-    "cls": "linear_probe/cls",
-    "mean": "linear_probe/mean",
+    "linear_probe_cls": ("Linear probe (cls, primary)", False, "linear_probe"),
+    "linear_probe_mean": ("Linear probe (mean, secondary)", True, "linear_probe"),
+    "lr": ("L2 Logistic Regression", False, "classical_ml"),
+    "xgboost": ("XGBoost", False, "classical_ml"),
 }
 
 
@@ -36,8 +39,9 @@ def _write_split_predictions(folder: Path, ids, rng, signal: float) -> None:
 
 
 @pytest.fixture
-def run_dir(tmp_path):
-    """Splits file plus predictions for lr, xgboost and both linear probe kinds."""
+def run_dir(tmp_path, monkeypatch):
+    """Splits file, predictions for four models and one manifest per family; evaluation output is redirected."""
+    monkeypatch.setattr(paths, "EVALUATION_BUILD_DIR", tmp_path / "evaluation")
     ids = [p for part in SPLIT_IDS.values() for p in part]
     pl.DataFrame(
         {
@@ -49,53 +53,121 @@ def run_dir(tmp_path):
         schema={"person_id": pl.Int64, "index_date": pl.Date, "label": pl.Int64, "split": pl.Utf8},
     ).write_parquet(tmp_path / "splits.parquet")
     rng = np.random.default_rng(0)
-    for signal, rel in zip((0.3, 0.4, 0.5, 0.2), MODELS.values()):
-        _write_split_predictions(tmp_path / rel / "test_predictions", SPLIT_IDS["test"], rng, signal)
-        _write_split_predictions(tmp_path / rel / "validation_predictions", SPLIT_IDS["val"], rng, signal)
-    (tmp_path / "linear_probe" / "summary.json").write_text(
-        json.dumps({"primary_kind": "cls", "secondary_kind": "mean"}), encoding="utf-8"
-    )
+    entries: dict[str, list[dict]] = {"cehrbert": [], "classical": []}
+    for signal, (name, (label, secondary, family)) in zip((0.5, 0.2, 0.3, 0.4), MODELS.items()):
+        folder = tmp_path / "preds" / name
+        _write_split_predictions(folder / "test_predictions", SPLIT_IDS["test"], rng, signal)
+        _write_split_predictions(folder / "validation_predictions", SPLIT_IDS["val"], rng, signal)
+        group = "classical" if family == "classical_ml" else "cehrbert"
+        entry = mf.make_entry(
+            name, label, family, folder / "test_predictions", folder / "validation_predictions", secondary
+        )
+        entries[group].append(entry)
+    for group, items in entries.items():
+        mf.upsert_models(tmp_path / f"{group}_manifest.json", items)
     return tmp_path
+
+
+def _manifest_args(root: Path) -> list[str]:
+    return ["--manifest", str(root / "cehrbert_manifest.json"), "--manifest", str(root / "classical_manifest.json")]
+
+
+def _run_step01(step, root: Path, *extra: str) -> int:
+    return step("evaluation/01_evaluate.py").main(
+        [*_manifest_args(root), "--name", "t", "--n-bootstrap", "20", "--report-dir", str(root / "report01"), *extra]
+    )
 
 
 def _run_step13(step, root: Path, *extra: str) -> int:
     return step("evaluation/02_compare_models.py").main(
         [
+            *_manifest_args(root),
+            "--name", "t",
             "--splits-file", str(root / "splits.parquet"),
-            "--baselines-dir", str(root / "baselines"),
-            "--linear-probe-dir", str(root / "linear_probe"),
-            "--output-dir", str(root / "out"),
-            "--figures-dir", str(root / "out" / "figures"),
             "--report-dir", str(root / "report"),
-            "--cehrbert-metrics", str(root / "missing" / "metrics.json"),
             "--n-bootstrap", "20",
             *extra,
         ]
     )  # fmt: skip
 
 
-def _status(root: Path) -> dict:
-    return json.loads((root / "report" / "status.json").read_text())
+def _status(root: Path, report: str = "report") -> dict:
+    return json.loads((root / report / "status.json").read_text())
 
 
-def _failed_checks(root: Path) -> list[str]:
-    return [c["name"] for c in _status(root)["checks"] if not c["ok"] and "match canonical split" in c["name"]]
+def _failed_checks(root: Path, report: str = "report") -> list[str]:
+    return [c["name"] for c in _status(root, report)["checks"] if not c["ok"] and c["level"] != "warning"]
+
+
+def _failed_parity(root: Path) -> list[str]:
+    return [n for n in _failed_checks(root) if "match canonical split" in n]
+
+
+def _out(root: Path) -> Path:
+    return root / "evaluation" / "t"
+
+
+def test_step01_scores_every_manifest_model_into_its_own_folder(step, run_dir):
+    assert _run_step01(step, run_dir) == 0
+    for name in MODELS:
+        model_dir = _out(run_dir) / "models" / name
+        assert (model_dir / "metrics.json").is_file()
+        assert (model_dir / "figures" / "roc_curve.png").is_file()
+        assert (model_dir / "reports" / "01_evaluate" / "status.json").is_file()
+    metrics = json.loads((_out(run_dir) / "models" / "lr" / "metrics.json").read_text())
+    assert metrics["threshold_selected_on"] == "validation"
+
+
+def test_step01_one_failing_model_fails_the_step_but_others_run(step, run_dir):
+    (run_dir / "preds" / "lr" / "test_predictions" / "predictions.parquet").unlink()
+    assert _run_step01(step, run_dir) == 1
+    assert _failed_checks(run_dir, "report01") == ["lr: evaluation succeeded"]
+    assert not (_out(run_dir) / "models" / "lr" / "metrics.json").exists()
+    assert (_out(run_dir) / "models" / "xgboost" / "metrics.json").is_file()
+
+
+def test_step01_missing_default_manifest_warns_and_no_model_fails(step, run_dir, monkeypatch):
+    monkeypatch.setattr(paths, "CEHRBERT_MODEL_BUILD_DIR", run_dir / "no_cehrbert")
+    monkeypatch.setattr(paths, "CLASSICAL_ML_BUILD_DIR", run_dir / "classical_ml")
+    lr = MODELS["lr"]
+    entry = mf.make_entry(
+        "lr", lr[0], lr[2], run_dir / "preds" / "lr" / "test_predictions", run_dir / "preds" / "lr" / "validation_predictions"
+    )
+    mf.upsert_models(paths.classical_manifest_path(paths.window_label(365)), [entry])
+    module = step("evaluation/01_evaluate.py")
+    args = ["--name", "t", "--n-bootstrap", "20", "--report-dir", str(run_dir / "report01")]
+    assert module.main(args) == 0
+    warnings = [c["name"] for c in _status(run_dir, "report01")["checks"] if c["level"] == "warning" and not c["ok"]]
+    assert any("cehrbert_model" in w for w in warnings)
+    assert (_out(run_dir) / "models" / "lr" / "metrics.json").is_file()
+
+    assert module.main([*args, "--window-days", "-1"]) == 1
+    assert "at least one model to evaluate" in _failed_checks(run_dir, "report01")
+
+
+def test_step01_single_model_mode_keeps_working(step, run_dir):
+    out = run_dir / "single"
+    rc = step("evaluation/01_evaluate.py").main(
+        [
+            "--predictions", str(run_dir / "preds" / "lr" / "test_predictions"),
+            "--val-predictions", str(run_dir / "preds" / "lr" / "validation_predictions"),
+            "--results-dir", str(out), "--figures-dir", str(out / "figures"), "--report-dir", str(out / "rep"),
+            "--n-bootstrap", "20",
+        ]
+    )  # fmt: skip
+    assert rc == 0 and (out / "metrics.json").is_file() and (out / "figures" / "pr_curve.png").is_file()
 
 
 def test_step13_passes_and_writes_outputs(step, run_dir):
+    assert _run_step01(step, run_dir) == 0
     assert _run_step13(step, run_dir) == 0
-    out = run_dir / "out"
+    out = _out(run_dir)
     for name in ("comparison.json", "comparison.md", "figures/compare_roc.png", "figures/compare_pr.png"):
         assert (out / name).is_file(), name
 
     data = json.loads((out / "comparison.json").read_text())
     labels = [m["model"] for m in data["models"]]
-    assert labels == [
-        "Linear probe (cls, primary)",
-        "Linear probe (mean, secondary)",
-        "L2 Logistic Regression",
-        "XGBoost",
-    ]
+    assert labels == [label for label, _, _ in MODELS.values()]
     assert [m["secondary"] for m in data["models"]] == [False, True, False, False]
     for row in data["models"]:
         assert len(row["sensitivity_ci95"]) == 2 and len(row["calibration_slope_ci95"]) == 2
@@ -110,11 +182,41 @@ def test_step13_passes_and_writes_outputs(step, run_dir):
     assert all(ch not in md for ch in (chr(0x2014), chr(0x2013)))
 
 
-def test_step13_without_linear_probe_still_runs(step, run_dir):
-    (run_dir / "linear_probe" / "summary.json").unlink()
-    assert _run_step13(step, run_dir) == 0
-    data = json.loads((run_dir / "out" / "comparison.json").read_text())
+def test_step13_with_one_manifest_compares_only_its_models(step, run_dir):
+    assert _run_step01(step, run_dir) == 0
+    rc = step("evaluation/02_compare_models.py").main(
+        [
+            "--manifest", str(run_dir / "classical_manifest.json"),
+            "--name", "t",
+            "--splits-file", str(run_dir / "splits.parquet"),
+            "--report-dir", str(run_dir / "report"),
+            "--n-bootstrap", "20",
+        ]
+    )  # fmt: skip
+    assert rc == 0
+    data = json.loads((_out(run_dir) / "comparison.json").read_text())
     assert [m["model"] for m in data["models"]] == ["L2 Logistic Regression", "XGBoost"]
+
+
+def test_step13_fails_naming_the_model_when_step01_metrics_are_missing(step, run_dir):
+    assert _run_step01(step, run_dir) == 0
+    (_out(run_dir) / "models" / "xgboost" / "metrics.json").unlink()
+    assert _run_step13(step, run_dir) == 1
+    assert _failed_checks(run_dir) == ["XGBoost: step 01 metrics available"]
+    detail = [c["detail"] for c in _status(run_dir)["checks"] if c["name"] == "XGBoost: step 01 metrics available"]
+    assert "evaluation step 01" in detail[0]
+
+
+def test_step13_does_not_launch_subprocesses(step, run_dir, monkeypatch):
+    import subprocess
+
+    assert _run_step01(step, run_dir) == 0
+
+    def boom(*args, **kwargs):
+        raise AssertionError("step 02 must not start a subprocess")
+
+    monkeypatch.setattr(subprocess, "run", boom)
+    assert _run_step13(step, run_dir) == 0
 
 
 def _drop_test_patient(df):
@@ -133,23 +235,26 @@ def _flip_label(df):
 
 @pytest.mark.parametrize("corrupt", [_drop_test_patient, _duplicate_row, _flip_label])
 def test_step13_fails_when_test_predictions_differ_from_split(step, run_dir, corrupt):
-    path = run_dir / "baselines" / "xgboost" / "test_predictions" / "predictions.parquet"
+    path = run_dir / "preds" / "xgboost" / "test_predictions" / "predictions.parquet"
     corrupt(pd.read_parquet(path)).to_parquet(path, index=False)
-    assert _run_step13(step, run_dir, "--skip-eval") == 1
-    assert _failed_checks(run_dir) == ["XGBoost: test predictions match canonical split"]
+    assert _run_step01(step, run_dir) == 0
+    assert _run_step13(step, run_dir) == 1
+    assert _failed_parity(run_dir) == ["XGBoost: test predictions match canonical split"]
 
 
 def test_step13_fails_when_validation_predictions_missing(step, run_dir):
-    (run_dir / "linear_probe" / "mean" / "validation_predictions" / "predictions.parquet").unlink()
-    assert _run_step13(step, run_dir, "--skip-eval") == 1
-    assert _failed_checks(run_dir) == ["Linear probe (mean, secondary): val predictions match canonical split"]
+    assert _run_step01(step, run_dir) == 0
+    (run_dir / "preds" / "linear_probe_mean" / "validation_predictions" / "predictions.parquet").unlink()
+    assert _run_step13(step, run_dir) == 1
+    assert _failed_parity(run_dir) == ["Linear probe (mean, secondary): val predictions match canonical split"]
 
 
 def test_step13_fails_when_validation_patients_differ(step, run_dir):
-    path = run_dir / "baselines" / "lr" / "validation_predictions" / "predictions.parquet"
+    path = run_dir / "preds" / "lr" / "validation_predictions" / "predictions.parquet"
     pd.read_parquet(path).iloc[1:].to_parquet(path, index=False)
-    assert _run_step13(step, run_dir, "--skip-eval") == 1
-    assert _failed_checks(run_dir) == ["L2 Logistic Regression: val predictions match canonical split"]
+    assert _run_step01(step, run_dir) == 0
+    assert _run_step13(step, run_dir) == 1
+    assert _failed_parity(run_dir) == ["L2 Logistic Regression: val predictions match canonical split"]
 
 
 def test_check_parity_counts(tmp_path):

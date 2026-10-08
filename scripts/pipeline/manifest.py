@@ -118,3 +118,67 @@ def upsert_models(manifest_path: str | Path, entries: list[dict]) -> Path:
     manifest_path.parent.mkdir(parents=True, exist_ok=True)
     manifest_path.write_text(json.dumps({"models": merged}, indent=2), encoding="utf-8")
     return manifest_path
+
+
+def add_selection_args(parser) -> None:
+    """The options evaluation steps 01 and 02 share for choosing which manifests (and so models) to use."""
+    parser.add_argument(
+        "--manifest",
+        action="append",
+        default=None,
+        metavar="PATH",
+        help="Predictions manifest to include (repeatable). Default: the cehrbert_model manifest for "
+        "--window-days and --ctx and the classical_ml manifest for --window-days.",
+    )
+    parser.add_argument(
+        "--window-days",
+        type=int,
+        default=paths.DEFAULT_WINDOW_DAYS,
+        help="Look-back window in days for the default manifests (negative = all history).",
+    )
+    parser.add_argument("--ctx", type=int, default=paths.DEFAULT_CTX, help="Token context for the default manifests.")
+    parser.add_argument(
+        "--name",
+        default=None,
+        help="Comparison name, the folder under build/evaluation/ (default: the cehrbert run label).",
+    )
+
+
+def comparison_name(args) -> str:
+    return args.name or paths.run_label(args.window_days, args.ctx)
+
+
+def collect_models(args) -> tuple[list[ManifestModel], list[tuple[bool, str, str]]]:
+    """Models of the selected manifests plus findings as ``(is_failure, check name, detail)``.
+
+    An explicit ``--manifest`` that cannot be read is a failure. A missing default manifest only warns, and the
+    family is skipped. Model names must be unique across all manifests.
+    """
+    findings: list[tuple[bool, str, str]] = []
+    if args.manifest:
+        sources = [(Path(m), True, f"manifest {m}") for m in args.manifest]
+    else:
+        label = paths.run_label(args.window_days, args.ctx)
+        sources = [
+            (paths.cehrbert_manifest_path(label), False, "cehrbert_model manifest"),
+            (paths.classical_manifest_path(paths.window_label(args.window_days)), False, "classical_ml manifest"),
+        ]
+    models: list[ManifestModel] = []
+    seen: dict[str, Path] = {}
+    for path, explicit, what in sources:
+        check = f"{what} readable"
+        if not path.is_file() and not explicit:
+            findings.append((False, check, f"no manifest at {path}; that model family is skipped"))
+            continue
+        try:
+            found = read_manifest(path)
+        except ManifestError as exc:
+            findings.append((explicit, check, str(exc)))
+            continue
+        for model in found:
+            if model.name in seen:
+                findings.append((True, f"model name {model.name!r} unique", f"in both {seen[model.name]} and {path}"))
+                continue
+            seen[model.name] = path
+            models.append(model)
+    return models, findings

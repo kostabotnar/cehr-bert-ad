@@ -1,44 +1,39 @@
 #!/usr/bin/env python
-"""Step 02: Compare the frozen CEHR-BERT linear probe and the classical baselines.
+"""Step 02: Compare the models listed in the prediction manifests.
 
-Models compared (each evaluated with the *exact same* code, ``evaluation/01_evaluate.py``):
+Reads the same manifests as step 01 (same options and defaults: the cehrbert_model manifest for
+``--window-days``/``--ctx`` and the classical_ml manifest for ``--window-days``). Nothing is re-scored here:
+each model's ``metrics.json`` comes from step 01, which must have run for the same comparison name.
 
-  * the fine-tuned CEHR-BERT classifier, when its metrics exist (skipped with a warning otherwise)
-  * the linear probe on the frozen pretrained CEHR-BERT: the primary feature kind named in
-    ``linear_probe/summary.json`` and, in a separate row marked secondary, the other kind
-  * L2 logistic regression and XGBoost from classical_ml step 02
+Before anything is compared, a parity check matches every model's TEST predictions with the canonical test
+split (person_ids, labels, row count including duplicates) and its VALIDATION predictions with the canonical
+val split. Any difference, missing validation predictions, or a model without step 01 metrics fails the
+step. Per-model counts are written to the step report and ``comparison.json``.
 
-Before anything is scored, a parity check compares every included model's TEST predictions with
-the canonical test split (person_ids, labels, row count including duplicates) and its VALIDATION
-predictions with the canonical val split. Any difference, or missing validation predictions,
-fails the step. Per-model counts are written to the step report and ``comparison.json``.
-
-Outputs
+Outputs (comparison name = ``--name``, default the cehrbert run label)
 -------
-  build/<run_label>/comparison.json, comparison.md
+  build/evaluation/<name>/comparison.json, comparison.md
       per-model metrics (each with 95% CI from the model's step 01 metrics.json) and paired
       AUROC / AUPRC differences between every pair of models (paired patient bootstrap)
-  build/<run_label>/figures/compare_roc.png, compare_pr.png
-  build/<run_label>/reports/02_compare_models/{status.json,report.md}
+  build/evaluation/<name>/figures/compare_roc.png, compare_pr.png
+  build/evaluation/<name>/reports/02_compare_models/{status.json,report.md}
 
 Inputs
 ------
-  splits              : data/cohort/splits.parquet                   (--splits-file)
-  linear probe        : build/<run_label>/linear_probe/{summary.json,<kind>/...}
-  baseline <m>        : build/<run_label>/baselines/<m>/{test,validation}_predictions
-  CEHR-BERT (optional): build/<run_label>/metrics.json, data/finetune_results/{test,validation}_predictions
+  splits    : data/cohort/splits.parquet                                (--splits-file)
+  manifests : predictions_manifest.json files                           (--manifest, repeatable)
+  metrics   : build/evaluation/<name>/models/<model>/metrics.json       (evaluation step 01)
 
 Usage
 -----
   python evaluation/02_compare_models.py
-  python evaluation/02_compare_models.py --skip-eval          # reuse existing metrics.json
+  python evaluation/02_compare_models.py --manifest A/predictions_manifest.json --manifest B/predictions_manifest.json
 """
 
 from __future__ import annotations
 
 import argparse
 import json
-import subprocess
 import sys
 from pathlib import Path
 
@@ -47,81 +42,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from pipeline import baselines as bl  # noqa: E402
 from pipeline import comparison as cmp  # noqa: E402
 from pipeline import evaluation as ev  # noqa: E402
+from pipeline import manifest  # noqa: E402
 from pipeline import paths  # noqa: E402
 from pipeline.reporting import StepReport  # noqa: E402
 
-# Human-readable labels for each known baseline key.
-MODEL_LABELS = {
-    "lr": "L2 Logistic Regression",
-    "xgboost": "XGBoost",
-}
-CEHRBERT_LABEL = "CEHR-BERT"
-
 # Operating point reported in the comparison table (matches 01_evaluate's headline).
 PRIMARY_METHOD = "youden"
-
-# Every model must be scored with the same evaluation/01_evaluate.py arguments; pass them explicitly
-# so a change to 01_evaluate's defaults cannot silently make the models incomparable.
-EVAL_N_BOOTSTRAP = 2000
-EVAL_SEED = 42
-EVAL_CAL_BINS = 10
-
-
-# --------------------------------------------------------------------------- #
-# Subprocess evaluation
-# --------------------------------------------------------------------------- #
-def evaluate_command(
-    model_dir: Path,
-    n_bootstrap: int = EVAL_N_BOOTSTRAP,
-    seed: int = EVAL_SEED,
-    cal_bins: int = EVAL_CAL_BINS,
-) -> list[str]:
-    """Command line that runs evaluation/01_evaluate.py on one model's prediction folders."""
-    evaluate_script = Path(__file__).resolve().parent / "01_evaluate.py"
-    return [
-        sys.executable,
-        str(evaluate_script),
-        "--predictions",
-        str(model_dir / "test_predictions"),
-        "--val-predictions",
-        str(model_dir / "validation_predictions"),
-        "--results-dir",
-        str(model_dir),
-        "--figures-dir",
-        str(model_dir / "figures"),
-        "--report-dir",
-        str(model_dir / "reports" / "01_evaluate"),
-        "--n-bootstrap",
-        str(n_bootstrap),
-        "--seed",
-        str(seed),
-        "--cal-bins",
-        str(cal_bins),
-    ]
-
-
-def _evaluate_model(
-    spec: cmp.ModelSpec,
-    report: StepReport,
-    n_bootstrap: int = EVAL_N_BOOTSTRAP,
-    seed: int = EVAL_SEED,
-    cal_bins: int = EVAL_CAL_BINS,
-) -> None:
-    """Run evaluation/01_evaluate.py on one model's predictions; record success/failure."""
-    cmd = evaluate_command(spec.evaluate_dir, n_bootstrap, seed, cal_bins)
-    try:
-        proc = subprocess.run(cmd, capture_output=True, text=True)
-    except Exception as exc:  # noqa: BLE001
-        report.add_check(f"{spec.label}: evaluation succeeded", ok=False, detail=f"subprocess failed to launch: {exc}")
-        return
-
-    ok = proc.returncode == 0
-    detail = f"return code {proc.returncode}"
-    if not ok:
-        tail = (proc.stderr or proc.stdout or "").strip().splitlines()[-5:]
-        detail += "; " + " | ".join(line.strip() for line in tail) if tail else ""
-    report.add_check(f"{spec.label}: evaluation succeeded", ok=ok, detail=detail[:500])
-
 
 # --------------------------------------------------------------------------- #
 # Metrics loading + table formatting
@@ -324,152 +250,39 @@ def _save_fig(fig, out_path: Path) -> Path:
 
 
 # --------------------------------------------------------------------------- #
-# Model discovery
-# --------------------------------------------------------------------------- #
-def _linear_probe_specs(probe_dir: Path, report: StepReport) -> list[cmp.ModelSpec]:
-    """Primary and secondary linear probe kinds named by summary.json; empty (with a warning) if absent."""
-    summary = _load_json(probe_dir / "summary.json")
-    kinds = [(summary or {}).get("primary_kind"), (summary or {}).get("secondary_kind")]
-    if summary is None or not all(kinds):
-        report.warn(
-            "linear probe summary available",
-            ok=False,
-            detail=f"missing or unreadable summary.json at {probe_dir}; linear probe skipped",
-        )
-        return []
-    specs = []
-    for kind, role in zip(kinds, ("primary", "secondary")):
-        kind_dir = probe_dir / kind
-        if not cmp.has_predictions(kind_dir / "test_predictions"):
-            report.warn(
-                f"linear probe {kind} ({role}) test predictions present",
-                ok=False,
-                detail=f"no parquet predictions in {kind_dir}; skipped",
-            )
-            continue
-        specs.append(
-            cmp.ModelSpec(
-                label=f"Linear probe ({kind}, {role})",
-                test_dir=kind_dir / "test_predictions",
-                val_dir=kind_dir / "validation_predictions",
-                metrics_path=kind_dir / "metrics.json",
-                evaluate_dir=kind_dir,
-                secondary=role == "secondary",
-            )
-        )
-    return specs
-
-
-def _baseline_specs(models: list[str], baselines_dir: Path, report: StepReport) -> list[cmp.ModelSpec]:
-    specs = []
-    for model in models:
-        model_dir = baselines_dir / model
-        label = MODEL_LABELS.get(model, model)
-        if not cmp.has_predictions(model_dir / "test_predictions"):
-            report.warn(
-                f"{label} test predictions present",
-                ok=False,
-                detail=f"no parquet predictions at {model_dir / 'test_predictions'}; skipping",
-            )
-            continue
-        specs.append(
-            cmp.ModelSpec(
-                label=label,
-                test_dir=model_dir / "test_predictions",
-                val_dir=model_dir / "validation_predictions",
-                metrics_path=model_dir / "metrics.json",
-                evaluate_dir=model_dir,
-            )
-        )
-    return specs
-
-
-# --------------------------------------------------------------------------- #
 # Main
 # --------------------------------------------------------------------------- #
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Compare the linear probe and baselines (and CEHR-BERT if present)")
-    parser.add_argument(
-        "--models", nargs="+", default=["lr", "xgboost"], help="Baseline model keys to evaluate and compare"
-    )
-    parser.add_argument(
-        "--window-days",
-        type=int,
-        default=paths.DEFAULT_WINDOW_DAYS,
-        help="Look-back window in days; negative => unbounded (all history)",
-    )
-    parser.add_argument("--ctx", type=int, default=paths.DEFAULT_CTX, help="CEHR-BERT token cap; part of the run label")
+    parser = argparse.ArgumentParser(description="Compare the models listed in the prediction manifests")
+    manifest.add_selection_args(parser)
     parser.add_argument("--splits-file", default=str(paths.COHORT_SPLITS_FILE), help="Canonical splits parquet")
     parser.add_argument(
-        "--baselines-dir",
+        "--output-dir",
         default=None,
-        help="Directory holding per-baseline prediction/metric folders (default: per-run baselines_dir)",
-    )
-    parser.add_argument(
-        "--linear-probe-dir",
-        default=None,
-        help="Linear probe output folder with summary.json (default: per-run linear_probe_dir)",
-    )
-    parser.add_argument(
-        "--output-dir", default=None, help="Where comparison.json / comparison.md go (default: per-run folder)"
-    )
-    parser.add_argument(
-        "--cehrbert-metrics",
-        default=None,
-        help="Fine-tuned CEHR-BERT metrics.json (default: per-run eval_results_dir/metrics.json)",
-    )
-    parser.add_argument(
-        "--cehrbert-predictions",
-        default=str(paths.TEST_PREDICTIONS_DIR),
-        help="Fine-tuned CEHR-BERT test predictions folder",
-    )
-    parser.add_argument(
-        "--cehrbert-val-predictions",
-        default=str(paths.VAL_PREDICTIONS_DIR),
-        help="Fine-tuned CEHR-BERT validation predictions folder",
+        help="Where comparison.json / comparison.md go (default: build/evaluation/<name>)",
     )
     parser.add_argument(
         "--figures-dir",
         default=None,
-        help="Where to save compare_roc.png / compare_pr.png (default: per-run figures_dir)",
+        help="Where to save compare_roc.png / compare_pr.png (default: build/evaluation/<name>/figures)",
     )
     parser.add_argument(
-        "--skip-eval", action="store_true", help="Skip re-running 01_evaluate; reuse existing metrics.json"
+        "--n-bootstrap", type=int, default=ev.EVAL_N_BOOTSTRAP, help="Resamples for the paired bootstrap"
     )
+    parser.add_argument("--seed", type=int, default=ev.EVAL_SEED, help="Paired bootstrap seed")
     parser.add_argument(
-        "--n-bootstrap",
-        type=int,
-        default=EVAL_N_BOOTSTRAP,
-        help="Resamples for evaluation/01_evaluate.py (keep equal across models) and for the paired bootstrap",
+        "--report-dir", default=None, help="Report dir (default: build/evaluation/<name>/reports/02_compare_models)"
     )
-    parser.add_argument(
-        "--seed", type=int, default=EVAL_SEED, help="Bootstrap seed, also passed to evaluation/01_evaluate.py"
-    )
-    parser.add_argument(
-        "--cal-bins",
-        type=int,
-        default=EVAL_CAL_BINS,
-        help="Passed to evaluation/01_evaluate.py; keep equal across models",
-    )
-    parser.add_argument("--report-dir", default=None, help="Report dir (default: per-run report dir for the run label)")
     args = parser.parse_args(argv)
 
-    run = paths.run_label(args.window_days, args.ctx)
-    baselines_dir = Path(args.baselines_dir) if args.baselines_dir else paths.baselines_dir(run)
-    probe_dir = Path(args.linear_probe_dir) if args.linear_probe_dir else paths.linear_probe_dir(run)
-    output_dir = Path(args.output_dir) if args.output_dir else paths.run_dir(run)
-    figures_dir = Path(args.figures_dir) if args.figures_dir else paths.figures_dir(run)
-    cehrbert_metrics = (
-        Path(args.cehrbert_metrics) if args.cehrbert_metrics else paths.eval_results_dir(run) / "metrics.json"
-    )
-    report_dir = Path(args.report_dir) if args.report_dir else paths.build_report_dir_for("02_compare_models", run)
+    name = manifest.comparison_name(args)
+    output_dir = Path(args.output_dir) if args.output_dir else paths.evaluation_dir(name)
+    figures_dir = Path(args.figures_dir) if args.figures_dir else paths.evaluation_figures_dir(name)
+    report_dir = Path(args.report_dir) if args.report_dir else paths.evaluation_report_dir("02_compare_models", name)
 
     report = StepReport("02_compare_models", title="Step 02 - Compare models")
-    report.add_metric("run_label", run)
-    report.add_metric("baselines", list(args.models))
-    report.add_metric("baselines_dir", str(baselines_dir))
-    report.add_metric("linear_probe_dir", str(probe_dir))
-    report.add_metric("eval_args", {"n_bootstrap": args.n_bootstrap, "seed": args.seed, "cal_bins": args.cal_bins})
+    report.add_metric("comparison_name", name)
+    report.add_metric("paired_bootstrap", {"n_bootstrap": args.n_bootstrap, "seed": args.seed})
 
     # --- 1. canonical splits -------------------------------------------------
     try:
@@ -486,26 +299,21 @@ def main(argv: list[str] | None = None) -> int:
     )
     expected = {"val": splits.val.to_pandas(), "test": splits.test.to_pandas()}
 
-    # --- 2. discover models --------------------------------------------------
-    specs: list[cmp.ModelSpec] = []
-    cehrbert_data = _load_json(cehrbert_metrics)
-    if cehrbert_data is None:
-        report.warn(
-            f"{CEHRBERT_LABEL} metrics available",
-            ok=False,
-            detail=f"missing or unreadable metrics.json at {cehrbert_metrics}; fine-tuned model skipped",
+    # --- 2. models from the manifests ----------------------------------------
+    manifest_models, findings = manifest.collect_models(args)
+    for is_failure, check, detail in findings:
+        (report.add_check if is_failure else report.warn)(check, ok=False, detail=detail)
+    specs = [
+        cmp.ModelSpec(
+            label=m.display_label,
+            test_dir=m.test_predictions,
+            val_dir=m.validation_predictions,
+            metrics_path=paths.evaluation_model_dir(name, m.name) / "metrics.json",
+            secondary=m.secondary,
         )
-    else:
-        specs.append(
-            cmp.ModelSpec(
-                label=CEHRBERT_LABEL,
-                test_dir=Path(args.cehrbert_predictions),
-                val_dir=Path(args.cehrbert_val_predictions),
-                metrics_path=cehrbert_metrics,
-            )
-        )
-    specs += _linear_probe_specs(probe_dir, report)
-    specs += _baseline_specs(list(args.models), baselines_dir, report)
+        for m in manifest_models
+    ]
+    report.add_metric("models", [m.name for m in manifest_models])
 
     # --- 3. parity with the canonical splits ---------------------------------
     parity: dict[str, dict] = {}
@@ -521,26 +329,17 @@ def main(argv: list[str] | None = None) -> int:
             report.add_check(f"{spec.label}: {name} predictions match canonical split", res.ok, detail=res.detail())
             report.add_metric(f"parity[{spec.label}][{name}]", res.detail())
 
-    # --- 4. evaluate with step 01 --------------------------------------------
-    if args.skip_eval:
-        report.note("--skip-eval set: reusing existing metrics.json for each model")
-    else:
-        for spec in specs:
-            if spec.evaluate_dir is not None and parity_ok[spec.label]:
-                _evaluate_model(spec, report, args.n_bootstrap, args.seed, args.cal_bins)
-
-    # --- 5. load metrics and curve inputs ------------------------------------
+    # --- 4. load step 01 metrics and curve inputs ------------------------------------
     rows: list[dict] = []
     curve_inputs: list[tuple] = []
     frames: dict[str, object] = {}
     for spec in specs:
         metrics = _load_json(spec.metrics_path)
-        if metrics is None:
-            report.warn(
-                f"{spec.label} metrics available",
-                ok=False,
-                detail=f"missing or unreadable metrics.json at {spec.metrics_path}",
-            )
+        if not report.add_check(
+            f"{spec.label}: step 01 metrics available",
+            metrics is not None,
+            detail=f"missing or unreadable metrics.json at {spec.metrics_path}; run evaluation step 01 first",
+        ):
             continue
         row = _extract_row(spec.label, metrics, spec.secondary)
         rows.append(row)
@@ -565,7 +364,7 @@ def main(argv: list[str] | None = None) -> int:
         detail=f"{len(rows)} model(s) with metrics: " + ", ".join(r["model"] for r in rows),
     )
 
-    # --- 6. paired bootstrap -------------------------------------------------
+    # --- 5. paired bootstrap -------------------------------------------------
     paired: list[dict] = []
     if len(frames) >= 2:
         try:
@@ -576,7 +375,7 @@ def main(argv: list[str] | None = None) -> int:
     else:
         report.warn("paired bootstrap computed", ok=False, detail="fewer than 2 models passed parity")
 
-    # --- 7. comparison table (json + markdown) -------------------------------
+    # --- 6. comparison table (json + markdown) -------------------------------
     output_dir.mkdir(parents=True, exist_ok=True)
     comparison_json = output_dir / "comparison.json"
     comparison_md = output_dir / "comparison.md"
@@ -603,7 +402,7 @@ def main(argv: list[str] | None = None) -> int:
     report.add_artifact(comparison_md)
     print(_auroc_winner(rows))
 
-    # --- 8. overlaid curves --------------------------------------------------
+    # --- 7. overlaid curves --------------------------------------------------
     roc_ok = pr_ok = False
     if curve_inputs:
         try:
@@ -626,7 +425,7 @@ def main(argv: list[str] | None = None) -> int:
     report.add_check("ROC comparison figure written", ok=roc_ok, detail=str(figures_dir / "compare_roc.png"))
     report.add_check("PR comparison figure written", ok=pr_ok, detail=str(figures_dir / "compare_pr.png"))
 
-    # --- 9. finalize ---------------------------------------------------------
+    # --- 8. finalize ---------------------------------------------------------
     report.write(report_dir)
     report.print_summary()
     print(f"\nReport written to {report_dir}")
