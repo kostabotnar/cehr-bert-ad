@@ -55,6 +55,40 @@ def sequence_person_ids(seq_dir: str | Path, require_concepts: bool = True) -> s
     return set(lf.select(PERSON_ID).unique().collect()[PERSON_ID].to_list())
 
 
+# Folders cehrbert_data creates inside its input folder, or earlier runs left in the OMOP folder. They are
+# never linked: processed_* and qualified_concept_list are CEHR-BERT outputs, patient_splits would change
+# how generate_training_data splits the sequences.
+NON_TABLE_FOLDERS = frozenset(
+    {"processed_measurement", "processed_observation", "processed_device", "qualified_concept_list", "patient_splits"}
+)
+
+
+def stage_omop_input(omop_dir: str | Path, staging_dir: str | Path) -> List[str]:
+    """Make ``staging_dir`` hold one symlink per OMOP table folder of ``omop_dir``; return the table names.
+
+    cehrbert_data writes ``processed_measurement`` and reads ``qualified_concept_list`` inside its input
+    folder, so it gets this folder and never the OMOP folder, which stays untouched. Every existing link
+    is dropped first (the wrapper script links ``qualified_concept_list`` again after generating it). A real file or folder at a table name (for example ``processed_measurement`` written by
+    cehrbert_data) is left alone, and a table name taken by one raises ``FileExistsError``.
+    """
+    omop_dir, staging_dir = Path(omop_dir), Path(staging_dir)
+    staging_dir.mkdir(parents=True, exist_ok=True)
+    tables = sorted(
+        p.name
+        for p in omop_dir.iterdir()
+        if p.is_dir() and p.name not in NON_TABLE_FOLDERS and any(p.glob("*.parquet"))
+    )
+    for link in staging_dir.iterdir():
+        if link.is_symlink():
+            link.unlink()
+    for name in tables:
+        link = staging_dir / name
+        if link.exists() or link.is_symlink():
+            raise FileExistsError(f"{link} exists and is not a link; remove it")
+        link.symlink_to((omop_dir / name).resolve(), target_is_directory=True)
+    return tables
+
+
 def newest_mtime(seq_dir: str | Path) -> Optional[float]:
     files = sequence_files(seq_dir)
     return max(f.stat().st_mtime for f in files) if files else None

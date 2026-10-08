@@ -13,7 +13,9 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
-INPUT_FOLDER="${INPUT_FOLDER:-${PROJECT_ROOT}/data/omop_data}"
+# INPUT_FOLDER is the staging folder of symlinks to the OMOP tables (see 02_prepare_pretraining_data.py): cehrbert_data
+# writes processed_measurement and reads qualified_concept_list inside it, so it must never be the OMOP folder.
+INPUT_FOLDER="${INPUT_FOLDER:-${PROJECT_ROOT}/data/cehrbert_data/omop_input}"
 OUTPUT_FOLDER="${OUTPUT_FOLDER:-${PROJECT_ROOT}/data/cehrbert_data}"
 START_DATE="${START_DATE:-1952-01-01}"
 
@@ -54,8 +56,8 @@ echo "Generating concept list..."
     --min_num_of_patients 100 \
     --ehr_table_list condition_occurrence procedure_occurrence drug_exposure measurement
 
-# Symlink so training-data generation finds qualified_concept_list.
-ln -sf "${OUTPUT_FOLDER}/qualified_concept_list" "${INPUT_FOLDER}/qualified_concept_list" 2>/dev/null || true
+# Symlink so training-data generation finds qualified_concept_list (in the staging folder, not the OMOP data).
+ln -sfn "${OUTPUT_FOLDER}/qualified_concept_list" "${INPUT_FOLDER}/qualified_concept_list"
 
 echo ""
 echo "Generating patient sequences..."

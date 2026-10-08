@@ -38,6 +38,53 @@ def _splits_file(tmp_path: Path, persons=range(1, 13), test=TEST_IDS, val=VAL_ID
 
 
 # --------------------------------------------------------------------------- #
+# Step 2: staging folder for cehrbert_data
+# --------------------------------------------------------------------------- #
+def _omop_tables(root: Path, names) -> Path:
+    for name in names:
+        (root / name).mkdir(parents=True)
+        pl.DataFrame({"person_id": [1]}).write_parquet(root / name / "data.parquet")
+    return root
+
+
+def test_stage_omop_input_links_tables_and_replaces_stale_links(tmp_path):
+    omop = _omop_tables(tmp_path / "omop", ["person", "concept", "measurement"])
+    # CEHR-BERT outputs and stray folders that an earlier run left in the OMOP folder are not tables.
+    _omop_tables(omop, ["processed_measurement", "qualified_concept_list"])
+    (omop / "notes").mkdir()
+    staging = tmp_path / "stage"
+    staging.mkdir()
+    (staging / "stale").symlink_to(omop / "person", target_is_directory=True)
+    (staging / "qualified_concept_list").symlink_to(omop / "concept", target_is_directory=True)
+
+    tables = pd_.stage_omop_input(omop, staging)
+
+    assert tables == ["concept", "measurement", "person"]
+    assert sorted(p.name for p in staging.iterdir()) == tables
+    assert all((staging / t).is_symlink() and (staging / t).resolve() == (omop / t).resolve() for t in tables)
+    pd_.stage_omop_input(omop, staging)  # idempotent
+    assert sorted(p.name for p in staging.iterdir()) == tables
+
+
+def test_stage_omop_input_keeps_cehrbert_output_and_never_writes_to_omop(tmp_path):
+    omop = _omop_tables(tmp_path / "omop", ["person"])
+    staging = tmp_path / "stage"
+    pd_.stage_omop_input(omop, staging)
+    (staging / "processed_measurement").mkdir()  # what cehrbert_data writes into its input folder
+    pd_.stage_omop_input(omop, staging)
+    assert (staging / "processed_measurement").is_dir() and not (staging / "processed_measurement").is_symlink()
+    assert sorted(p.name for p in omop.iterdir()) == ["person"]
+
+
+def test_stage_omop_input_refuses_to_replace_a_real_folder(tmp_path):
+    omop = _omop_tables(tmp_path / "omop", ["person"])
+    staging = tmp_path / "stage"
+    (staging / "person").mkdir(parents=True)
+    with pytest.raises(FileExistsError):
+        pd_.stage_omop_input(omop, staging)
+
+
+# --------------------------------------------------------------------------- #
 # Step 3b: pretraining input without the test persons
 # --------------------------------------------------------------------------- #
 def test_step03b_removes_exactly_the_test_persons(step, spark_sequences, tmp_path):

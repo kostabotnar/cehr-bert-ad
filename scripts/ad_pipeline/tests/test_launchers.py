@@ -36,6 +36,8 @@ def _status(report_dir):
 def test_step02_launch_success(step, omop_dir, tmp_path, monkeypatch):
     mod = step("02_prepare_pretraining_data.py")
     out_folder = tmp_path / "cehrbert_data"
+    staging = out_folder / "omop_input"
+    omop_before = sorted(p.name for p in omop_dir.iterdir())
 
     def make_sequences(cmd, cwd, env):
         seq = out_folder / "patient_sequence"
@@ -52,6 +54,8 @@ def test_step02_launch_success(step, omop_dir, tmp_path, monkeypatch):
             str(omop_dir),
             "--output-folder",
             str(out_folder),
+            "--staging-dir",
+            str(staging),
             "--report-dir",
             str(rep),
         ]
@@ -59,6 +63,10 @@ def test_step02_launch_success(step, omop_dir, tmp_path, monkeypatch):
     assert rc == 0
     assert _status(rep) == "pass"
     assert len(rec.calls) == 1
+    # The wrapper gets the staging folder, never the OMOP folder, and the OMOP folder stays untouched.
+    assert rec.calls[0]["env"]["INPUT_FOLDER"] == str(staging)
+    assert omop_before == sorted(p.name for p in omop_dir.iterdir())
+    assert (staging / "person").is_symlink() and (staging / "person").resolve() == (omop_dir / "person").resolve()
     # Spark env is passed through to the wrapper.
     assert "SPARK_DRIVER_MEMORY" in rec.calls[0]["env"]
     assert rec.calls[0]["cmd"][0] == "bash"
@@ -72,10 +80,22 @@ def test_step02_preflight_gate_blocks_launch(step, tmp_path, monkeypatch):
     empty = tmp_path / "empty_omop"
     empty.mkdir()
     rep = tmp_path / "rep02b"
-    rc = mod.main(["--input-folder", str(empty), "--output-folder", str(tmp_path / "o"), "--report-dir", str(rep)])
+    rc = mod.main(
+        [
+            "--input-folder",
+            str(empty),
+            "--output-folder",
+            str(tmp_path / "o"),
+            "--staging-dir",
+            str(tmp_path / "stage"),
+            "--report-dir",
+            str(rep),
+        ]
+    )
     assert rc == 1
     assert _status(rep) == "fail"
     assert rec.calls == []  # never launched
+    assert not (tmp_path / "stage").exists()
 
 
 # --- step 04 ---------------------------------------------------------------
