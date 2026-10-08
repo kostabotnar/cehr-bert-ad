@@ -31,6 +31,7 @@ from tokenizers.pre_tokenizers import WhitespaceSplit  # noqa: E402
 
 from pipeline import evaluation as ev  # noqa: E402
 from pipeline import linear_probe as lp  # noqa: E402
+from pipeline import manifest as mf  # noqa: E402
 from pipeline import paths  # noqa: E402
 
 HIDDEN = 16
@@ -615,9 +616,9 @@ def _run_step16(step, features, out, report):
             "--features-dir", str(features),
             "--output-dir", str(out),
             "--report-dir", str(report),
+            "--manifest", str(out.parent / "predictions_manifest.json"),
             "--cv-folds", "2",
             "--n-jobs", "1",
-            "--skip-evaluate",
         ]
     )  # fmt: skip
     assert rc == 0
@@ -653,6 +654,13 @@ def test_step16_smoke_outputs_and_schema(step, tmp_path):
             assert df["predicted_boolean_probability"].between(0, 1).all()
             y_true, y_prob = ev.load_predictions(out / kind / sub)
             assert len(y_true) == n and len(y_prob) == n
+    models = {m.name: m for m in mf.read_manifest(tmp_path / "predictions_manifest.json")}
+    assert list(models) == ["linear_probe_cls", "linear_probe_mean"]
+    assert [models[n].secondary for n in models] == [False, True]
+    assert models["linear_probe_cls"].display_label == "Linear probe (cls, primary)"
+    assert models["linear_probe_mean"].display_label == "Linear probe (mean, secondary)"
+    assert models["linear_probe_mean"].test_predictions == out / "mean" / "test_predictions"
+    assert models["linear_probe_cls"].validation_predictions == out / "cls" / "validation_predictions"
     test_meta = pd.read_parquet(features / "test" / "meta.parquet")
     pred = pd.read_parquet(out / "cls" / "test_predictions")
     assert sorted(pred["subject_id"]) == sorted(test_meta["person_id"])
@@ -685,7 +693,7 @@ def test_step16_fails_without_features(step, tmp_path):
             "--features-dir", str(tmp_path / "missing"),
             "--output-dir", str(tmp_path / "out"),
             "--report-dir", str(tmp_path / "report"),
-            "--skip-evaluate",
+            "--manifest", str(tmp_path / "manifest.json"),
         ]
     )  # fmt: skip
     assert rc != 0
@@ -705,14 +713,8 @@ def test_search_grid_matches_plan():
     assert search.cv.n_splits == 5 and search.cv.shuffle and search.cv.random_state == 42
 
 
-def test_evaluate_command_pins_arguments(tmp_path):
-    cmd = lp.evaluate_command(tmp_path / "cls", tmp_path / "rep")
-    assert cmd[cmd.index("--n-bootstrap") + 1] == "2000"
-    assert cmd[cmd.index("--seed") + 1] == "42"
-    assert cmd[cmd.index("--cal-bins") + 1] == "10"
-    assert cmd[cmd.index("--val-predictions") + 1].endswith("validation_predictions")
-
-
 def test_probe_paths_use_run_label():
     label = paths.run_label(365, 512)
-    assert paths.linear_probe_features_dir(label).as_posix().endswith("build/w_365_ctx512/linear_probe/features")
+    assert paths.cehrbert_linear_probe_features_dir(label).as_posix().endswith(
+        "build/cehrbert_model/w_365_ctx512/linear_probe/features"
+    )

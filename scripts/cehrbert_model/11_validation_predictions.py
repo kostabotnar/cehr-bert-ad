@@ -44,8 +44,9 @@ Usage:
     python cehrbert_model/11_validation_predictions.py
     python cehrbert_model/11_validation_predictions.py --finetune-config cehrbert_model/configs/ad_finetune_config.yaml
 
-After this completes, re-run ``python evaluation/01_evaluate.py`` to pick up the
-validation threshold automatically.
+When the checks pass, the fine-tuned model (``cehrbert_finetuned``, with the step 10 test predictions and these
+validation predictions) is added to build/cehrbert_model/<run_label>/predictions_manifest.json. Evaluation step 01
+then scores it with the validation threshold.
 """
 
 from __future__ import annotations
@@ -59,10 +60,13 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from pipeline import manifest as mf  # noqa: E402
 from pipeline import paths  # noqa: E402
 from pipeline.config_validation import load_yaml, write_config  # noqa: E402
 from pipeline.reporting import StepReport  # noqa: E402
 from pipeline.predictions_checks import _read_json  # noqa: E402
+
+FINETUNED_MODEL_NAME = "cehrbert_finetuned"
 
 
 def build_validation_predict_config(finetune_cfg: dict) -> dict:
@@ -360,6 +364,21 @@ def _add_output_checks(report: StepReport, val_prediction_folder: Path, results_
     report.add_check("validation_results.json present & valid", metrics is not None, detail=str(results_path))
 
 
+def _update_manifest(report: StepReport, manifest_path: Path, results_dir: Path) -> None:
+    """Register the fine-tuned model in the cehrbert_model manifest; warn instead when the test predictions are absent."""
+    test_dir = results_dir / "test_predictions"
+    if not report.warn(
+        "test predictions present for the manifest",
+        ok=test_dir.is_dir() and any(test_dir.glob("*.parquet")),
+        detail=f"{test_dir}; run step 10 to add {FINETUNED_MODEL_NAME} to the manifest",
+    ):
+        return
+    entry = mf.make_entry(
+        FINETUNED_MODEL_NAME, "CEHR-BERT", "cehrbert", test_dir, results_dir / "validation_predictions"
+    )
+    report.add_artifact(mf.upsert_models(manifest_path, [entry]))
+
+
 def main(argv: list[str] | None = None) -> int:
     # Parse THIS script's args with a dedicated parser FIRST, before we touch sys.argv for
     # cehrbert's own (single-yaml-path) parser.
@@ -380,15 +399,16 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--report-dir",
         default=None,
-        help="Override report dir; defaults to build/<run_label>/reports/11_validation_predictions.",
+        help="Override report dir; defaults to build/cehrbert_model/<run_label>/reports/11_validation_predictions.",
     )
+    parser.add_argument("--manifest", default=None, help="Predictions manifest to update (default: per-run manifest)")
     args = parser.parse_args(argv)
 
-    # Build report nests under build/<run_label>/; an explicit override still wins.
+    # The report nests under build/cehrbert_model/<run_label>/; an explicit override still wins.
     # (validation_predictions themselves stay under data/finetune_results -- unchanged.)
     label = paths.run_label(args.window_days, args.ctx)
     report_dir = (
-        Path(args.report_dir) if args.report_dir else paths.build_report_dir_for("11_validation_predictions", label)
+        Path(args.report_dir) if args.report_dir else paths.cehrbert_report_dir("11_validation_predictions", label)
     )
 
     report = StepReport(
@@ -442,6 +462,10 @@ def main(argv: list[str] | None = None) -> int:
     report.add_metric("results_dir", args.results_dir)
     _add_output_checks(report, val_prediction_folder, Path(args.results_dir))
 
+    if report.passed:
+        manifest_path = Path(args.manifest) if args.manifest else paths.cehrbert_manifest_path(label)
+        _update_manifest(report, manifest_path, Path(args.results_dir))
+
     return _finalize(report, report_dir)
 
 
@@ -451,7 +475,7 @@ def _finalize(report: StepReport, report_dir: str) -> int:
     print(f"\nReport written to {report_dir}")
     if report.passed:
         print("Validation predictions in data/finetune_results/validation_predictions/")
-        print("Next: re-run `python evaluation/01_evaluate.py` to pick up the validation threshold.")
+        print("Next: python evaluation/01_evaluate.py")
     return report.exit_code()
 
 

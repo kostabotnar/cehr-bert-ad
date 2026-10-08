@@ -16,8 +16,6 @@ from __future__ import annotations
 
 import dataclasses
 import json
-import subprocess
-import sys
 from contextlib import nullcontext
 from pathlib import Path
 from typing import Iterable
@@ -30,18 +28,12 @@ from sklearn.model_selection import GridSearchCV, StratifiedKFold
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
-from . import paths
 
 FEATURE_KINDS = ("cls", "mean")
 SPLIT_NAMES = ("train", "val", "test")
 
 # Columns the collator emits that the encoder does not accept.
 NON_MODEL_COLUMNS = ("person_id", "index_date", "age_at_index", "classifier_label")
-
-# Same evaluation arguments for every model (plan section 3).
-EVAL_N_BOOTSTRAP = 2000
-EVAL_SEED = 42
-EVAL_CAL_BINS = 10
 
 C_GRID = tuple(float(c) for c in np.logspace(-4, 2, 7))
 CLASS_WEIGHT_GRID = (None, "balanced")
@@ -341,43 +333,6 @@ def fit_on_train(X_train: np.ndarray, y_train: np.ndarray, cv_folds: int, seed: 
 def choose_primary_kind(val_auroc: dict[str, float]) -> str:
     """Feature kind with the highest validation AUROC (ties go to the first kind in FEATURE_KINDS)."""
     return max(FEATURE_KINDS, key=lambda k: (val_auroc.get(k, float("-inf")), -FEATURE_KINDS.index(k)))
-
-
-def evaluate_command(
-    kind_dir: Path,
-    report_dir: Path,
-    n_bootstrap: int = EVAL_N_BOOTSTRAP,
-    seed: int = EVAL_SEED,
-    cal_bins: int = EVAL_CAL_BINS,
-) -> list[str]:
-    """Command line that runs evaluation/01_evaluate.py on one feature kind's prediction folders."""
-    script = paths.EVALUATION_DIR / "01_evaluate.py"
-    return [
-        sys.executable,
-        str(script),
-        "--predictions",
-        str(kind_dir / "test_predictions"),
-        "--val-predictions",
-        str(kind_dir / "validation_predictions"),
-        "--results-dir",
-        str(kind_dir),
-        "--figures-dir",
-        str(kind_dir / "figures"),
-        "--report-dir",
-        str(report_dir),
-        "--n-bootstrap",
-        str(n_bootstrap),
-        "--seed",
-        str(seed),
-        "--cal-bins",
-        str(cal_bins),
-    ]
-
-
-def run_evaluate(kind_dir: Path, report_dir: Path, **kwargs) -> int:
-    cmd = evaluate_command(kind_dir, report_dir, **kwargs)
-    print("+ " + " ".join(cmd))
-    return subprocess.run(cmd, check=False).returncode
 
 
 def write_json(path: Path, obj) -> Path:

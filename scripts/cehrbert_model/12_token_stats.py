@@ -10,11 +10,11 @@ For each, the distribution (mean/percentiles/max) plus the share of sequences ex
 length (``--ctx``) and exceeding 512. Patient history length is a cohort property and lives in
 ``data_qc/02_history_length_stats.py``.
 
-Outputs (under build/<run_label>/)
+Outputs (under build/cehrbert_model/<run_label>/)
 -------
-  build/<label>/token_stats.json
-  build/<label>/figures/token_length_hist.png
-  build/<label>/reports/12_token_stats/{status.json,report.md}
+  token_stats.json
+  figures/token_length_hist.png
+  reports/12_token_stats/{status.json,report.md}
 
 Usage
 -----
@@ -151,9 +151,9 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     label = paths.run_label(args.window_days, args.ctx)
-    results_dir = Path(args.results_dir) if args.results_dir else paths.eval_results_dir(label)
-    figures_dir = Path(args.figures_dir) if args.figures_dir else paths.figures_dir(label)
-    report_dir = Path(args.report_dir) if args.report_dir else paths.build_report_dir_for("12_token_stats", label)
+    results_dir = Path(args.results_dir) if args.results_dir else paths.cehrbert_model_dir(label)
+    figures_dir = Path(args.figures_dir) if args.figures_dir else paths.cehrbert_figures_dir(label)
+    report_dir = Path(args.report_dir) if args.report_dir else paths.cehrbert_report_dir("12_token_stats", label)
 
     report = StepReport(
         "12_token_stats",
