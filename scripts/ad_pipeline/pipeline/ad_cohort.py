@@ -65,15 +65,21 @@ def read_release_date(data_dir: Path) -> dt.date | None:
         return None
 
 
-def add_rule_flags(df: pl.DataFrame, gap_days: int, window_days: int, min_age: int, index_floor: dt.date) -> pl.DataFrame:
+def add_rule_flags(
+    df: pl.DataFrame, gap_days: int, window_days: int, min_age: int, index_floor: dt.date
+) -> pl.DataFrame:
     """Add ``index_date`` (anchor - gap) and the booleans for rules 1 to 3 (null inputs fail)."""
-    return df.with_columns((pl.col("anchor_date") - pl.duration(days=gap_days)).alias("index_date")).with_columns(
-        age_years_expr("index_date", "birth_date").alias("age"),
-        (pl.col("index_date") >= index_floor).fill_null(False).alias("ok_index_floor"),
-        (pl.col("first_visit") <= pl.col("index_date") - pl.duration(days=window_days))
-        .fill_null(False)
-        .alias("ok_history"),
-    ).with_columns((pl.col("age") >= min_age).fill_null(False).alias("ok_age"))
+    return (
+        df.with_columns((pl.col("anchor_date") - pl.duration(days=gap_days)).alias("index_date"))
+        .with_columns(
+            age_years_expr("index_date", "birth_date").alias("age"),
+            (pl.col("index_date") >= index_floor).fill_null(False).alias("ok_index_floor"),
+            (pl.col("first_visit") <= pl.col("index_date") - pl.duration(days=window_days))
+            .fill_null(False)
+            .alias("ok_history"),
+        )
+        .with_columns((pl.col("age") >= min_age).fill_null(False).alias("ok_age"))
+    )
 
 
 def events_in_window(data_dir: Path, idx: pl.DataFrame, window_days: int) -> pl.Series:
@@ -107,9 +113,7 @@ def events_in_window(data_dir: Path, idx: pl.DataFrame, window_days: int) -> pl.
     return pl.concat(found).unique()
 
 
-def apply_rules(
-    df: pl.DataFrame, data_dir: Path, window_days: int
-) -> tuple[pl.DataFrame, dict[str, int]]:
+def apply_rules(df: pl.DataFrame, data_dir: Path, window_days: int) -> tuple[pl.DataFrame, dict[str, int]]:
     """Apply rules 1 to 4 in order to a frame with the flags from ``add_rule_flags``.
 
     Returns the kept rows and ``{"candidates", "excluded_<rule>" ..., "remaining"}``.
@@ -157,7 +161,9 @@ def control_candidates(
     cand = (
         cand.with_columns((pl.col("index_date") - pl.duration(days=1)).alias("_key"))
         .sort("_key")
-        .join_asof(right, left_on="_key", right_on="prev_visit", by="person_id", strategy="backward", check_sortedness=False)
+        .join_asof(
+            right, left_on="_key", right_on="prev_visit", by="person_id", strategy="backward", check_sortedness=False
+        )
         .filter(pl.col("prev_visit") >= pl.col("index_date") - pl.duration(days=window_days))
     )
     counts["after_visit_in_window"] = cand.height
@@ -182,8 +188,11 @@ def draw_control_anchors(
     if reachable.is_empty():
         return empty, info
 
-    person_year = reachable.select("person_id", "year").unique().sort("person_id", "year").with_columns(
-        pl.lit(_BAND).alias("band")
+    person_year = (
+        reachable.select("person_id", "year")
+        .unique()
+        .sort("person_id", "year")
+        .with_columns(pl.lit(_BAND).alias("band"))
     )
     weights = _fit_stratum_weights(person_year, target.with_columns(pl.lit(_BAND).alias("band")))
     person_year = person_year.join(weights.select("year", "w"), on="year")
@@ -220,6 +229,7 @@ def year_counts(anchor_dates: pl.Series) -> dict[int, int]:
 
 def anchor_year_smd(case_dates: pl.Series, control_dates: pl.Series) -> float | None:
     """Standardized mean difference of the anchor calendar year, controls minus cases."""
+
     def stats(s: pl.Series):
         y = s.dt.year().cast(pl.Float64)
         return (y.mean(), y.std()) if y.len() > 1 else (None, None)
