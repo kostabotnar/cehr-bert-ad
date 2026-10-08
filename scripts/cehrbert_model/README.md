@@ -29,6 +29,10 @@ Steps run in numeric order.
 The heavy steps (01 Spark, 05, 09, 10 runners) are a Python entrypoint that owns preflight checks
 and reporting plus a thin bash wrapper that sets environment variables and calls the cehrbert or
 cehrbert_data tool. Run the Python entrypoint; it calls the wrapper.
+`01_generate_sequences.sh` can be run directly to debug the Spark step, but then it needs the
+environment variable `MIN_CONCEPT_PATIENTS` (the minimum distinct patients per concept for
+`generate_included_concept_list`; the value is `MIN_CONCEPT_PATIENTS` in `pipeline/omop_common.py`,
+shared with cohort step 01) and exits with an error without it.
 
 ```bash
 bash cehrbert_model/run.sh                                  # all steps
