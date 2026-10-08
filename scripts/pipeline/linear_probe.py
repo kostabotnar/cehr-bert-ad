@@ -1,6 +1,6 @@
 """Shared, testable code for the frozen CEHR-BERT linear probe (cehrbert_model steps 13 and 14).
 
-Cehrbert_model step 13 turns each patient's pre-index history into a fixed-size vector with the frozen
+cehrbert_model step 13 turns each patient's pre-index history into a fixed-size vector with the frozen
 pretrained encoder; cehrbert_model step 14 fits an L2 logistic regression on those vectors. Two feature
 kinds are produced from ``last_hidden_state``:
 
@@ -48,7 +48,7 @@ CLASS_WEIGHT_GRID = (None, "balanced")
 
 
 # --------------------------------------------------------------------------- #
-# Cehrbert_model step 13: feature extraction
+# cehrbert_model step 13: feature extraction
 # --------------------------------------------------------------------------- #
 def pool_features(
     last_hidden_state: torch.Tensor,
@@ -316,7 +316,7 @@ def load_split_features(features_dir: str | Path, split: str, kind: str) -> tupl
 
 
 # --------------------------------------------------------------------------- #
-# Cehrbert_model step 14: tuning
+# cehrbert_model step 14: tuning
 # --------------------------------------------------------------------------- #
 def build_search(cv_folds: int = 5, seed: int = 42, n_jobs: int = -1) -> GridSearchCV:
     """StandardScaler + L2 logistic regression, tuned over C and class_weight by CV AUROC."""

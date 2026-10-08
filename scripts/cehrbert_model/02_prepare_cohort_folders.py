@@ -11,7 +11,7 @@ with the columns person_id (int64), index_date (date) and label (int64).
 
 Gate: every cohort person must have a non-empty sequence in ``patient_sequence`` (step 01). A
 person without one cannot be tokenized and would make step 09 fail; the step fails and lists up to 20
-person_ids. Cohort step 01 builds the cohort from OMOP tables only, with an event rule that mirrors how the
+person_ids. cohort step 01 builds the cohort from OMOP tables only, with an event rule that mirrors how the
 sequences are built, so a failure here points at a mismatch between the two (for example a different
 ``--min-concept-patients`` than the ``--min_num_of_patients`` of step 01).
 

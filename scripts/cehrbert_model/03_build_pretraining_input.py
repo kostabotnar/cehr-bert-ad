@@ -76,7 +76,7 @@ def main(argv: list[str] | None = None) -> int:
         counts["rows_removed"] + counts["rows_remaining"] == counts["rows_total"],
         detail=f"{counts['rows_removed']} + {counts['rows_remaining']} vs {counts['rows_total']}",
     )
-    # Cohort step 01 keeps only persons with a sequence, so a shortfall means it ran on other sequences.
+    # cohort step 01 keeps only persons with a sequence, so a shortfall means it ran on other sequences.
     report.warn(
         "every test person had a sequence",
         ok=counts["rows_removed"] == len(test_ids),

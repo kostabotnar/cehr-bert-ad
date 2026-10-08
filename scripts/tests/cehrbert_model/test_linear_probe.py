@@ -367,7 +367,7 @@ def test_window_excludes_index_day_and_matches_step11_semantics(tmp_path, window
         encoding="utf-8",
     )
     ds = lp.build_split_dataset(split, tmp_path / "work", config, base, window_days)
-    # Classical_ml step 01 window: [index - window, index), i.e. offsets 1..window days (all history: > 0).
+    # classical_ml step 01 window: [index - window, index), i.e. offsets 1..window days (all history: > 0).
     expected = sorted(kept, reverse=True)
     for row in ds:
         assert row["concept_ids"] == [str(d) for d in expected]

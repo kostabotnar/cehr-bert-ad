@@ -38,7 +38,7 @@ def _splits_file(tmp_path: Path, persons=range(1, 13), test=TEST_IDS, val=VAL_ID
 
 
 # --------------------------------------------------------------------------- #
-# Cehrbert_model step 01: staging folder for cehrbert_data
+# cehrbert_model step 01: staging folder for cehrbert_data
 # --------------------------------------------------------------------------- #
 def _omop_tables(root: Path, names) -> Path:
     for name in names:
@@ -85,7 +85,7 @@ def test_stage_omop_input_refuses_to_replace_a_real_folder(tmp_path):
 
 
 # --------------------------------------------------------------------------- #
-# Cehrbert_model step 03: pretraining input without the test persons
+# cehrbert_model step 03: pretraining input without the test persons
 # --------------------------------------------------------------------------- #
 def test_step03_removes_exactly_the_test_persons(step, spark_sequences, tmp_path):
     mod = step("cehrbert_model/03_build_pretraining_input.py")
@@ -238,7 +238,7 @@ def test_prepared_path_hash_changes_with_keep_demographic_prompt(tmp_path, model
 
 
 # --------------------------------------------------------------------------- #
-# Cehrbert_model step 05 preflight: input excludes test persons, no stale artifacts
+# cehrbert_model step 05 preflight: input excludes test persons, no stale artifacts
 # --------------------------------------------------------------------------- #
 def _pretrain_config(tmp_path: Path, data_folder: Path, model_dir: Path, **extra) -> Path:
     tmp_path.mkdir(parents=True, exist_ok=True)
@@ -324,7 +324,7 @@ def test_stale_prepared_dataset_is_reported(spark_sequences, tmp_path):
 
 
 # --------------------------------------------------------------------------- #
-# Cehrbert_model step 07: full tokenized dataset
+# cehrbert_model step 07: full tokenized dataset
 # --------------------------------------------------------------------------- #
 @pytest.fixture
 def trained_tokenizer_dir(spark_sequences, tmp_path):

@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """Extract and rank feature importance for the trained LR and XGBoost baselines.
 
-Classical_ml step 02 saves the fitted estimators (``model.joblib``) and classical_ml step 01 saves a column-aligned
+classical_ml step 02 saves the fitted estimators (``model.joblib``) and classical_ml step 01 saves a column-aligned
 ``feature_names.json``, but neither persists ranked importances. This helper loads both and
 writes ranked tables:
 
