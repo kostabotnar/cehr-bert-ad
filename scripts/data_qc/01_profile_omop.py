@@ -8,7 +8,7 @@ distribution follows the cases, see ``pipeline/omop_profile.py``). The goal is t
 rules (date floor, case definition, control exclusions, index rule, minimum history) before
 training. Nothing is applied to any cohort file.
 
-Outputs (under build/omop_profile/ by default)
+Outputs (under build/data_qc/omop_profile/ by default)
   profile.json         all sections, by view
   table1.csv / .md     one row per variable level, SMD of each control view versus AD
   exclusion_flow.csv   sequential candidate exclusions (reported only)
