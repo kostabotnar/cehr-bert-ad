@@ -1,12 +1,12 @@
 #!/usr/bin/env python
-"""Step 6: Prepare the finetuning dataset — build the labeled AD cohort.
+"""Step 6: Build the labeled AD cohort and the canonical train/val/test split.
 
-Produces ``data/omop_data/ad_cohort/cohort.parquet`` with the columns the finetune
-runner expects:
+Reads only the OMOP tables and writes ``data/cohort/splits.parquet`` with the columns
 
     person_id  (int)   patient identifier
     index_date (date)  prediction time point (chart is "frozen" here)
     label      (int)   1 = develops Alzheimer's after index_date, 0 = control
+    split      (str)   train, val or test
 
 Task framing ("predict AD anytime in the future"):
   * Cases (label=1): patients with >=1 Alzheimer's diagnosis. Anchor = first AD diagnosis,
@@ -16,8 +16,11 @@ Task framing ("predict AD anytime in the future"):
     control anchor years follow the case anchor years (capped at cutoff minus follow-up).
     index_date = anchor minus GAP days.
   * Inclusion, identical for both groups at index_date: age >= --min-age, index_date >=
-    --index-floor, first visit <= index_date minus --window-days, and >= 1 condition, drug,
-    procedure or measurement in [index_date - window, index_date).
+    --index-floor, first visit <= index_date minus --window-days, and >= 1 event in
+    [index_date - window, index_date). An event is a condition, drug, procedure or measurement row
+    linked to a visit whose standard concept is used by >= --min-concept-patients persons, the
+    events CEHR-BERT turns into sequence tokens. This keeps the cohort free of patients without a
+    CEHR-BERT sequence without reading any CEHR-BERT output.
   See pipeline/ad_cohort.py for the exact definitions.
 
 AD is identified from condition_occurrence.condition_source_value, which holds strings
@@ -25,17 +28,11 @@ like "ICD-10-CM:G30.9". condition_concept_id holds standard SNOMED ids, and the 
 table uses plain codes (vocabulary ICD10CM, concept_code "G30.9"), so neither can be
 matched against the "ICD-10-CM:" strings.
 
-A final step keeps only patients with a usable sequence; the others would make step 8 fail.
-``--intersect-with`` picks the source of the person_ids:
-  * ``sequences`` (default): the raw sequences of step 2 (data/cehrbert_data/patient_sequence)
-    with at least one concept, the ones tokenization keeps. Works before pretraining, which is
-    where this step now runs: steps 3b and 4 need its test split to exclude test patients.
-  * ``tokenized``: the full tokenized dataset of step 5b (data/full_tokenized).
-  * ``none``: no intersection (same as --skip-tokenized-check).
+The CEHR-BERT cohort folders for the finetune runner are derived from splits.parquet by step 02b.
 
 Usage:
     python 06_prepare_finetuning_data.py
-    python 06_prepare_finetuning_data.py --gap-days 730 --intersect-with none
+    python 06_prepare_finetuning_data.py --gap-days 730 --min-concept-patients 0
 """
 
 from __future__ import annotations
@@ -54,6 +51,7 @@ from pipeline import ad_cohort, paths  # noqa: E402
 from pipeline.omop_common import AD_CODE_PATTERNS, is_ad_source_value  # noqa: E402
 from pipeline.omop_validation import table_glob  # noqa: E402
 from pipeline.reporting import StepReport  # noqa: E402
+
 
 def _require_glob(data_dir: Path, table: str) -> str:
     glob = table_glob(data_dir, table)
@@ -80,8 +78,9 @@ def build_cohort(
     index_floor: dt.date = dt.date(2000, 1, 1),
     followup_days: int = 365,
     seed: int = 42,
+    min_concept_patients: int = 100,
 ) -> pl.DataFrame:
-    """Build the (pre-intersection) cohort dataframe and record stats on ``report``.
+    """Build the cohort dataframe (person_id, index_date, label) and record stats on ``report``.
 
     See ``pipeline/ad_cohort.py`` for the anchor, index and inclusion definitions.
     """
@@ -102,10 +101,11 @@ def build_cohort(
         return pl.DataFrame(schema=EMPTY_COHORT)
 
     persons = ad_cohort.read_persons(data_dir)
+    qualified = ad_cohort.qualified_concepts(data_dir, min_concept_patients)
+    report.add_metric("min_concept_patients", min_concept_patients)
+    report.add_metric("qualified_concepts", None if qualified is None else qualified.len())
     first_ad = (
-        ad_rows.group_by("person_id")
-        .agg(anchor_date=pl.col("condition_start_date").min())
-        .collect(engine="streaming")
+        ad_rows.group_by("person_id").agg(anchor_date=pl.col("condition_start_date").min()).collect(engine="streaming")
     )
     visit_dates = (
         pl.scan_parquet(_require_glob(data_dir, "visit_occurrence"))
@@ -131,7 +131,7 @@ def build_cohort(
     # Cases are not capped by the cutoff: recent cases stay in the cohort and only the control target is capped.
     cases = persons.join(first_ad, on="person_id").join(vsum, on="person_id", how="left")
     cases = ad_cohort.add_rule_flags(cases, gap_days, window_days, min_age, index_floor)
-    cases, case_counts = ad_cohort.apply_rules(cases, data_dir, window_days)
+    cases, case_counts = ad_cohort.apply_rules(cases, data_dir, window_days, qualified)
     _add_counts(report, "cases", case_counts)
 
     capped = cases.filter(pl.col("anchor_date") <= cap_date)["anchor_date"]
@@ -164,7 +164,7 @@ def build_cohort(
     drawn = ad_cohort.add_rule_flags(
         picked.join(controls_with_visits, on="person_id"), gap_days, window_days, min_age, index_floor
     )
-    drawn, control_counts = ad_cohort.apply_rules(drawn, data_dir, window_days)
+    drawn, control_counts = ad_cohort.apply_rules(drawn, data_dir, window_days, qualified)
     _add_counts(report, "controls", control_counts)
 
     achieved = ad_cohort.year_counts(drawn["anchor_date"])
@@ -186,51 +186,8 @@ def build_cohort(
         ]
     )
     report.add_metric("excluded_by_filters", persons.height - out.height)
+    report.add_metric("excluded_by_event_rule", case_counts["excluded_event"] + control_counts["excluded_event"])
     return out.sort("person_id")
-
-
-def restrict_to_tokenized(cohort: pl.DataFrame, prepared_dir: Path, report: StepReport) -> pl.DataFrame:
-    """Keep only patients present in the full tokenized dataset (step 5b)."""
-    from pipeline.dataset_checks import count_person_ids, datasets_available, resolve_prepared_path
-
-    if not prepared_dir.exists() or resolve_prepared_path(prepared_dir) is None:
-        report.warn("tokenized dataset available for verification", ok=False,
-                    detail=f"{prepared_dir} not found; run step 5b first or use --intersect-with sequences")
-        return cohort
-    if not datasets_available():
-        report.warn("tokenized dataset verification", ok=False,
-                    detail="`datasets` not installed; cannot intersect cohort with tokenized ids")
-        return cohort
-
-    tokenized_ids = count_person_ids(prepared_dir)
-    before = cohort.height
-    cohort = cohort.filter(pl.col("person_id").is_in(list(tokenized_ids)))
-    report.add_metric("tokenized_patients", len(tokenized_ids))
-    report.add_metric("dropped_no_sequence", before - cohort.height)
-    report.add_check("cohort patients remain after tokenized intersect", cohort.height > 0,
-                     detail=f"{cohort.height} remain of {before}")
-    return cohort
-
-
-def restrict_to_sequences(cohort: pl.DataFrame, sequence_dir: Path, report: StepReport) -> pl.DataFrame | None:
-    """Keep only patients with a non-empty sequence in ``sequence_dir``; None (failed check) if it has none."""
-    from pipeline.pretrain_data import sequence_person_ids, sequence_files
-
-    if not report.add_check(
-        "patient sequences available", bool(sequence_files(sequence_dir)), detail=f"{sequence_dir}; run step 2 first"
-    ):
-        return None
-    sequence_ids = sequence_person_ids(sequence_dir, require_concepts=True)
-    before = cohort.height
-    cohort = cohort.filter(pl.col("person_id").is_in(list(sequence_ids)))
-    report.add_metric("sequence_patients", len(sequence_ids))
-    report.add_metric("dropped_no_sequence", before - cohort.height)
-    report.add_check(
-        "cohort patients remain after sequence intersect",
-        cohort.height > 0,
-        detail=f"{cohort.height} remain of {before}",
-    )
-    return cohort
 
 
 def _bucket(seed: int, pid: int) -> int:
@@ -277,50 +234,69 @@ def _split_stats(report: StepReport, name: str, df: pl.DataFrame) -> None:
     report.add_metric(f"{name}_cases", n_case)
     report.add_metric(f"{name}_controls", n_ctrl)
     report.add_metric(f"{name}_prevalence", round(n_case / max(df.height, 1), 4))
-    report.warn(f"{name} cohort has both classes", ok=n_case > 0 and n_ctrl > 0,
-                detail=f"{n_case} cases, {n_ctrl} controls")
+    report.warn(
+        f"{name} cohort has both classes", ok=n_case > 0 and n_ctrl > 0, detail=f"{n_case} cases, {n_ctrl} controls"
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Build labeled AD cohort (finetuning dataset)")
     parser.add_argument("--data-dir", default=str(paths.OMOP_DIR))
-    parser.add_argument("--finetune-output", default=str(paths.COHORT_FINETUNE_FILE),
-                        help="Output parquet for the fine-tuning cohort")
-    parser.add_argument("--test-output", default=str(paths.COHORT_TEST_FILE),
-                        help="Output parquet for the held-out test cohort (used by step 9 prediction)")
-    parser.add_argument("--test-holdout", type=float, default=0.1,
-                        help="Fraction of patients held out for the test set (default: 0.1)")
-    parser.add_argument("--split-seed", type=int, default=42,
-                        help="Seed for the patient-level finetune/test split (default: 42)")
-    parser.add_argument("--splits-output", default=str(paths.COHORT_SPLITS_FILE),
-                        help="Output parquet with the canonical train/val/test split per patient")
-    parser.add_argument("--val-fraction", type=float, default=0.1,
-                        help="Fraction of the fine-tune cohort assigned to val (default: 0.1)")
-    parser.add_argument("--val-seed", type=int, default=43,
-                        help="Seed for the train/val split; differs from --split-seed so hash orders are independent")
+    parser.add_argument(
+        "--test-holdout", type=float, default=0.1, help="Fraction of patients held out for the test set (default: 0.1)"
+    )
+    parser.add_argument(
+        "--split-seed", type=int, default=42, help="Seed for the patient-level finetune/test split (default: 42)"
+    )
+    parser.add_argument(
+        "--splits-output",
+        default=str(paths.COHORT_SPLITS_FILE),
+        help="Output parquet with the canonical train/val/test split per patient",
+    )
+    parser.add_argument(
+        "--val-fraction",
+        type=float,
+        default=0.1,
+        help="Fraction of the fine-tune cohort assigned to val (default: 0.1)",
+    )
+    parser.add_argument(
+        "--val-seed",
+        type=int,
+        default=43,
+        help="Seed for the train/val split; differs from --split-seed so hash orders are independent",
+    )
     parser.add_argument("--gap-days", type=int, default=365, help="Lead time between index_date and first AD dx")
-    parser.add_argument("--window-days", type=int, default=365,
-                        help="Observation window before index_date (matches observation_window in the finetune config)")
+    parser.add_argument(
+        "--window-days",
+        type=int,
+        default=365,
+        help="Observation window before index_date (matches observation_window in the finetune config)",
+    )
     parser.add_argument("--min-age", type=int, default=50, help="Minimum age in years at index_date")
-    parser.add_argument("--index-floor", type=dt.date.fromisoformat, default=dt.date(2000, 1, 1),
-                        help="Earliest allowed index_date (YYYY-MM-DD)")
-    parser.add_argument("--control-followup-days", type=int, default=365,
-                        help="Observation required after a control anchor (last visit >= anchor + this)")
+    parser.add_argument(
+        "--index-floor",
+        type=dt.date.fromisoformat,
+        default=dt.date(2000, 1, 1),
+        help="Earliest allowed index_date (YYYY-MM-DD)",
+    )
+    parser.add_argument(
+        "--control-followup-days",
+        type=int,
+        default=365,
+        help="Observation required after a control anchor (last visit >= anchor + this)",
+    )
     parser.add_argument("--seed", type=int, default=42, help="Seed for the control anchor draw")
     parser.add_argument(
-        "--intersect-with",
-        choices=("sequences", "tokenized", "none"),
-        default="sequences",
-        help="Keep patients present in the raw sequences (default), the full tokenized "
-        "dataset of step 5b, or skip the intersection",
+        "--min-concept-patients",
+        type=int,
+        default=100,
+        help="Event rule: standard concepts must be used by this many persons, as in "
+        "generate_included_concept_list --min_num_of_patients (0 disables the concept part)",
     )
-    parser.add_argument("--patient-sequence-dir", default=str(paths.PATIENT_SEQUENCE_DIR))
-    parser.add_argument("--tokenized-dataset-path", default=str(paths.FULL_TOKENIZED_DIR))
-    parser.add_argument("--skip-tokenized-check", action="store_true", help="Same as --intersect-with none")
     parser.add_argument("--report-dir", default=str(paths.report_dir_for("06_prepare_finetuning_data")))
     args = parser.parse_args(argv)
 
-    report = StepReport("06_prepare_finetuning_data", title="Step 6 — Prepare finetuning data (AD cohort)")
+    report = StepReport("06_prepare_finetuning_data", title="Step 6: Prepare finetuning data (AD cohort)")
     data_dir = Path(args.data_dir).resolve()
     report.add_metric("data_dir", str(data_dir))
     report.add_metric("gap_days", args.gap_days)
@@ -340,22 +316,11 @@ def main(argv: list[str] | None = None) -> int:
             index_floor=args.index_floor,
             followup_days=args.control_followup_days,
             seed=args.seed,
+            min_concept_patients=args.min_concept_patients,
         )
     except FileNotFoundError as exc:
         report.add_check("required OMOP tables present", False, detail=str(exc))
         return _finalize(report, args.report_dir)
-
-    mode = "none" if args.skip_tokenized_check else args.intersect_with
-    report.add_metric("intersect_with", mode)
-    if mode == "none":
-        report.note("sequence/tokenized-data intersection skipped")
-    elif mode == "tokenized":
-        cohort = restrict_to_tokenized(cohort, Path(args.tokenized_dataset_path), report)
-    else:
-        restricted = restrict_to_sequences(cohort, Path(args.patient_sequence_dir), report)
-        if restricted is None:
-            return _finalize(report, args.report_dir)
-        cohort = restricted
 
     n_case = int(cohort.filter(pl.col("label") == 1).height)
     n_ctrl = int(cohort.filter(pl.col("label") == 0).height)
@@ -377,8 +342,6 @@ def main(argv: list[str] | None = None) -> int:
         return _finalize(report, args.report_dir)
 
     # --- patient-level finetune/test split -----------------------------------
-    finetune_path = Path(args.finetune_output)
-    test_path = Path(args.test_output)
     report.add_metric("test_holdout", args.test_holdout)
     report.add_metric("split_seed", args.split_seed)
     report.add_metric("val_fraction", args.val_fraction)
@@ -389,26 +352,27 @@ def main(argv: list[str] | None = None) -> int:
 
         # No patient leaks across the split.
         overlap = set(finetune_df["person_id"].to_list()) & set(test_df["person_id"].to_list())
-        report.add_check("finetune/test patient-disjoint", not overlap,
-                         detail="ok" if not overlap else f"{len(overlap)} shared person_ids")
+        report.add_check(
+            "finetune/test patient-disjoint",
+            not overlap,
+            detail="ok" if not overlap else f"{len(overlap)} shared person_ids",
+        )
 
         _split_stats(report, "finetune", finetune_df)
         _split_stats(report, "test", test_df)
-        report.add_check("both splits non-empty", finetune_df.height > 0 and test_df.height > 0,
-                         detail=f"finetune={finetune_df.height}, test={test_df.height}")
-
-        for path, df in ((finetune_path, finetune_df), (test_path, test_df)):
-            path.parent.mkdir(parents=True, exist_ok=True)
-            df.write_parquet(path)
-            report.add_artifact(path)
-        report.ok("finetune & test cohorts written",
-                  detail=f"{finetune_path}  |  {test_path}")
+        report.add_check(
+            "both splits non-empty",
+            finetune_df.height > 0 and test_df.height > 0,
+            detail=f"finetune={finetune_df.height}, test={test_df.height}",
+        )
 
         train_df, val_df = split_train_val(finetune_df, args.val_fraction, args.val_seed)
         splits_df = build_splits_table(train_df, val_df, test_df)
-        report.add_check("train/val/test cover the cohort exactly",
-                         splits_df.height == cohort.height and splits_df["person_id"].n_unique() == cohort.height,
-                         detail=f"{splits_df.height} rows for {cohort.height} patients")
+        report.add_check(
+            "train/val/test cover the cohort exactly",
+            splits_df.height == cohort.height and splits_df["person_id"].n_unique() == cohort.height,
+            detail=f"{splits_df.height} rows for {cohort.height} patients",
+        )
         _split_stats(report, "split_train", train_df)
         _split_stats(report, "split_val", val_df)
         _split_stats(report, "split_test", test_df)
@@ -426,7 +390,7 @@ def _finalize(report: StepReport, report_dir: str) -> int:
     report.print_summary()
     print(f"\nReport written to {report_dir}")
     if report.passed:
-        print("Next: python 03b_build_pretraining_input.py")
+        print("Next: python 02_prepare_pretraining_data.py")
     return report.exit_code()
 
 

@@ -19,7 +19,9 @@ Inclusion rules, applied identically on the final index
 -------------------------------------------------------
 1. age >= ``min_age`` at the index date; 2. index >= ``index_floor``; 3. first visit <=
 index - ``window_days``; 4. at least one event (condition, drug, procedure or measurement) in the
-half-open window ``[index - window_days, index)``. Rules 1 to 3 only need dates already at hand, so
+half-open window ``[index - window_days, index)`` that CEHR-BERT would turn into a sequence token: linked to
+a visit and with a standard concept used by at least ``min_concept_patients`` persons (see
+``qualified_concepts``). Rules 1 to 3 only need dates already at hand, so
 controls are pre-filtered on them at the candidate level (``control_candidates``).
 """
 
@@ -34,10 +36,10 @@ import polars as pl
 from .omop_common import age_years_expr, birth_date_expr, fit_stratum_weights, scan_table, smd_continuous
 
 EVENT_TABLES = (
-    ("condition_occurrence", "condition_start_date"),
-    ("drug_exposure", "drug_exposure_start_date"),
-    ("procedure_occurrence", "procedure_date"),
-    ("measurement", "measurement_date"),
+    ("condition_occurrence", "condition_start_date", "condition_concept_id"),
+    ("drug_exposure", "drug_exposure_start_date", "drug_concept_id"),
+    ("procedure_occurrence", "procedure_date", "procedure_concept_id"),
+    ("measurement", "measurement_date", "measurement_concept_id"),
 )
 
 RULES = ("age", "index_floor", "history", "event")  # ok_<rule> flags exist for the first three
@@ -82,25 +84,72 @@ def add_rule_flags(
     )
 
 
-def events_in_window(data_dir: Path, idx: pl.DataFrame, window_days: int) -> pl.Series:
-    """person_ids in ``idx`` (person_id, index_date) with any event in ``[index - window, index)``.
+def _event_rows(data_dir: Path, table: str, date_col: str, concept_col: str) -> pl.LazyFrame | None:
+    """person_id, date and standard concept id of the rows cehrbert_data turns into sequence events.
 
-    Tables are semi-joined one at a time against the persons still without an event, so memory stays
-    bounded by the index table.
+    Mirrors ``cehrbert_data.utils.spark_utils.extract_events_by_domain``: the standard concept id is
+    present and not 0, and the row is linked to a visit (``visit_occurrence_id IS NOT NULL``, the filter of
+    ``generate_included_concept_list``). The date must be present for every table but measurement, which
+    that function does not filter on date.
+    """
+    lf = scan_table(data_dir, table, ["person_id", date_col, concept_col, "visit_occurrence_id"])
+    if lf is None:
+        return None
+    keep = pl.col("visit_occurrence_id").is_not_null() & pl.col(concept_col).is_not_null() & (pl.col(concept_col) != 0)
+    if table != "measurement":
+        keep = keep & pl.col(date_col).is_not_null()
+    return lf.filter(keep).select(
+        "person_id", pl.col(date_col).alias("date"), pl.col(concept_col).cast(pl.Int64).alias("concept_id")
+    )
+
+
+def qualified_concepts(data_dir: Path, min_concept_patients: int) -> pl.Series | None:
+    """Standard concept ids used by at least ``min_concept_patients`` distinct persons, or None when it is 0.
+
+    Mirrors ``cehrbert_data.apps.generate_included_concept_list.main`` as called by
+    ``02_generate_pretraining_data.sh`` (``--min_num_of_patients 100``, condition, procedure, drug and
+    measurement tables, no drug rollup): the visit-linked events of all four tables are pooled, and a
+    concept qualifies when ``countDistinct(person_id) >= min_num_of_patients``. Concept 0 never counts.
+    Streaming over (person, concept) pairs keeps memory bounded on the large measurement table.
+    """
+    if min_concept_patients <= 0:
+        return None
+    frames = [f for f in (_event_rows(data_dir, *t) for t in EVENT_TABLES) if f is not None]
+    if not frames:
+        return pl.Series("concept_id", [], dtype=pl.Int64)
+    pairs = pl.concat([f.select("person_id", "concept_id") for f in frames]).unique()
+    counts = (
+        pairs.group_by("concept_id")
+        .agg(pl.len().alias("n_persons"))
+        .filter(pl.col("n_persons") >= min_concept_patients)
+    )
+    return counts.select("concept_id").collect(engine="streaming")["concept_id"]
+
+
+def events_in_window(
+    data_dir: Path, idx: pl.DataFrame, window_days: int, qualified: pl.Series | None = None
+) -> pl.Series:
+    """person_ids in ``idx`` (person_id, index_date) with a sequence event in ``[index - window, index)``.
+
+    An event counts as in ``_event_rows`` (visit linked, concept not 0); when ``qualified`` is given its
+    concept must also be in that set (``qualified_concepts``). Tables are semi-joined one at a time
+    against the persons still without an event, so memory stays bounded by the index table.
     """
     found: list[pl.Series] = []
     remaining = idx.select("person_id", "index_date")
-    for table, date_col in EVENT_TABLES:
+    for table, date_col, concept_col in EVENT_TABLES:
         if remaining.is_empty():
             break
-        lf = scan_table(data_dir, table, ["person_id", date_col])
+        lf = _event_rows(data_dir, table, date_col, concept_col)
         if lf is None:
             continue
+        if qualified is not None:
+            lf = lf.filter(pl.col("concept_id").is_in(qualified.implode()))
         hit = (
             lf.join(remaining.lazy(), on="person_id", how="inner")
             .filter(
-                (pl.col(date_col) < pl.col("index_date"))
-                & (pl.col(date_col) >= pl.col("index_date") - pl.duration(days=window_days))
+                (pl.col("date") < pl.col("index_date"))
+                & (pl.col("date") >= pl.col("index_date") - pl.duration(days=window_days))
             )
             .select("person_id")
             .unique()
@@ -113,7 +162,9 @@ def events_in_window(data_dir: Path, idx: pl.DataFrame, window_days: int) -> pl.
     return pl.concat(found).unique()
 
 
-def apply_rules(df: pl.DataFrame, data_dir: Path, window_days: int) -> tuple[pl.DataFrame, dict[str, int]]:
+def apply_rules(
+    df: pl.DataFrame, data_dir: Path, window_days: int, qualified: pl.Series | None = None
+) -> tuple[pl.DataFrame, dict[str, int]]:
     """Apply rules 1 to 4 in order to a frame with the flags from ``add_rule_flags``.
 
     Returns the kept rows and ``{"candidates", "excluded_<rule>" ..., "remaining"}``.
@@ -123,7 +174,7 @@ def apply_rules(df: pl.DataFrame, data_dir: Path, window_days: int) -> tuple[pl.
         before = df.height
         df = df.filter(pl.col(f"ok_{rule}"))
         counts[f"excluded_{rule}"] = before - df.height
-    with_event = events_in_window(data_dir, df, window_days)
+    with_event = events_in_window(data_dir, df, window_days, qualified)
     before = df.height
     df = df.filter(pl.col("person_id").is_in(with_event.implode()))
     counts["excluded_event"] = before - df.height

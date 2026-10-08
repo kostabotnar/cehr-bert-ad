@@ -2,7 +2,7 @@
 """Step 3b: Build the pretraining input without the held-out test patients.
 
 Writes ``data/cehrbert_data/patient_sequence_pretrain``: ``patient_sequence`` (step 2) minus every
-person in the ``test`` split of ``ad_cohort/splits.parquet`` (step 6). Pretraining (step 4,
+person in the ``test`` split of ``data/cohort/splits.parquet`` (step 6). Pretraining (step 4,
 ``data_folder`` in ``ad_pretrain_config.yaml``) reads only this folder, so the test patients are
 in neither the pretraining train nor validation split. The Spark layout is kept: one file per
 source file, same names, schema and snappy compression (a file left with no rows is skipped).

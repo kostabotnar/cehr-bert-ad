@@ -43,7 +43,7 @@ def test_splits_disjoint_and_cover_cohort(mod, cohort):
     assert 100 < val.height < 300
 
 
-def test_test_split_matches_existing_test_output(mod, cohort):
+def test_test_split_is_the_hash_holdout(mod, cohort):
     _, test = mod.split_finetune_test(cohort, 0.1, 42)
     _, _, _, table = _splits(mod, cohort)
     assert table.filter(pl.col("split") == "test").drop("split").equals(test)
@@ -60,25 +60,22 @@ def test_val_seed_changes_val_not_test(mod, cohort):
     assert test_a.equals(test_b)
 
 
-def test_main_writes_splits_and_keeps_outputs(mod, omop_dir, tmp_path):
+def test_main_writes_only_the_splits_file_and_is_deterministic(mod, omop_dir, tmp_path):
     def run(tag):
-        out = {k: tmp_path / tag / f"{k}.parquet" for k in ("ft", "te", "sp")}
+        out = tmp_path / tag / "splits.parquet"
         rc = mod.main(
             [
                 "--data-dir", str(omop_dir),
-                "--finetune-output", str(out["ft"]),
-                "--test-output", str(out["te"]),
-                "--splits-output", str(out["sp"]),
-                "--skip-tokenized-check",
+                "--splits-output", str(out),
+                "--min-concept-patients", "1",
                 "--report-dir", str(tmp_path / tag / "rep"),
             ]
         )  # fmt: skip
         assert rc == 0
-        return {k: pl.read_parquet(v) for k, v in out.items()}
+        assert list(out.parent.glob("*.parquet")) == [out]
+        return pl.read_parquet(out)
 
     a = run("a")
     b = run("b")
-    assert a["sp"].equals(b["sp"])
-    assert a["sp"].filter(pl.col("split") == "test").drop("split").equals(a["te"])
-    assert a["sp"].height == 5
-    assert set(a["sp"].filter(pl.col("split") != "test")["person_id"]) == set(a["ft"]["person_id"])
+    assert a.equals(b)
+    assert a.height == 5

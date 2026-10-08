@@ -8,7 +8,6 @@ from __future__ import annotations
 import json
 
 
-
 def _status(report_dir):
     return json.loads((report_dir / "status.json").read_text(encoding="utf-8"))["status"]
 
@@ -69,12 +68,18 @@ def test_step05_verify_pretraining(step, model_dir, prepared_dataset, tmp_path):
     rep = tmp_path / "rep05"
     splits = tmp_path / "splits.parquet"
     pl.DataFrame({"person_id": [1, 5, 9], "split": ["train", "val", "test"]}).write_parquet(splits)
-    rc = mod.main([
-        "--results-dir", str(model_dir),
-        "--prepared-dir", str(prepared_dataset),
-        "--splits-file", str(splits),
-        "--report-dir", str(rep),
-    ])
+    rc = mod.main(
+        [
+            "--results-dir",
+            str(model_dir),
+            "--prepared-dir",
+            str(prepared_dataset),
+            "--splits-file",
+            str(splits),
+            "--report-dir",
+            str(rep),
+        ]
+    )
     # Model + train_results pass; prepared-dataset content check may warn without datasets.
     assert rc == 0
     assert _status(rep) in {"pass", "warn"}
@@ -83,40 +88,50 @@ def test_step05_verify_pretraining(step, model_dir, prepared_dataset, tmp_path):
 def test_step05_no_model_fails(step, tmp_path):
     mod = step("05_verify_pretraining.py")
     rep = tmp_path / "rep05b"
-    rc = mod.main([
-        "--results-dir", str(tmp_path / "nope"),
-        "--prepared-dir", str(tmp_path / "nope2"),
-        "--report-dir", str(rep),
-    ])
+    rc = mod.main(
+        [
+            "--results-dir",
+            str(tmp_path / "nope"),
+            "--prepared-dir",
+            str(tmp_path / "nope2"),
+            "--report-dir",
+            str(rep),
+        ]
+    )
     assert rc == 1
 
 
 def test_step06_prepare_finetuning_data(step, omop_dir, tmp_path):
     mod = step("06_prepare_finetuning_data.py")
-    ft = tmp_path / "ft" / "cohort.parquet"
-    te = tmp_path / "te" / "cohort.parquet"
+    splits = tmp_path / "cohort" / "splits.parquet"
     rep = tmp_path / "rep06"
-    rc = mod.main([
-        "--data-dir", str(omop_dir),
-        "--finetune-output", str(ft),
-        "--test-output", str(te),
-        "--splits-output", str(tmp_path / "splits.parquet"),
-        "--skip-tokenized-check",
-        "--report-dir", str(rep),
-    ])
+    rc = mod.main(
+        [
+            "--data-dir",
+            str(omop_dir),
+            "--splits-output",
+            str(splits),
+            "--min-concept-patients",
+            "1",
+            "--report-dir",
+            str(rep),
+        ]
+    )
     assert rc == 0
-    assert ft.exists() and te.exists()
     payload = json.loads((rep / "status.json").read_text(encoding="utf-8"))
     # Full cohort is 2 cases + 3 controls; the holdout split keeps both non-empty.
     assert payload["metrics"]["cases"] == 2
     assert payload["metrics"]["controls"] == 3
     assert payload["metrics"]["finetune_size"] + payload["metrics"]["test_size"] == 5
+    assert payload["metrics"]["min_concept_patients"] == 1
+    assert "excluded_by_event_rule" in payload["metrics"]
 
     import polars as pl
 
-    ft_ids = set(pl.read_parquet(ft)["person_id"].to_list())
-    te_ids = set(pl.read_parquet(te)["person_id"].to_list())
-    assert ft_ids.isdisjoint(te_ids)  # patient-level, no leakage
+    table = pl.read_parquet(splits)
+    assert table.columns == ["person_id", "index_date", "label", "split"]
+    assert set(table["split"]) <= {"train", "val", "test"} and table.height == 5
+    assert list(splits.parent.iterdir()) == [splits]
 
 
 def test_step07_validate_finetune_config(step, finetune_config, tmp_path):

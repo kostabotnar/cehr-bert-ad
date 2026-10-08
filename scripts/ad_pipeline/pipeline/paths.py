@@ -35,6 +35,9 @@ REPORTS_DIR = AD_PIPELINE_DIR / "reports"
 DATA_DIR = PROJECT_ROOT / "data"
 OMOP_DIR = DATA_DIR / "omop_data"
 CEHRBERT_DATA_DIR = DATA_DIR / "cehrbert_data"
+# Read-only view of the OMOP table folders (symlinks). cehrbert_data writes processed_measurement and reads
+# qualified_concept_list inside its input folder, so step 02 points it here and never at OMOP_DIR.
+CEHRBERT_OMOP_INPUT_DIR = CEHRBERT_DATA_DIR / "omop_input"
 PATIENT_SEQUENCE_DIR = CEHRBERT_DATA_DIR / "patient_sequence"
 # patient_sequence without the step 6 test patients; the only input of pretraining (step 3b).
 PATIENT_SEQUENCE_PRETRAIN_DIR = CEHRBERT_DATA_DIR / "patient_sequence_pretrain"
@@ -42,7 +45,7 @@ PATIENT_SEQUENCE_PRETRAIN_DIR = CEHRBERT_DATA_DIR / "patient_sequence_pretrain"
 PRETRAIN_PREPARED_DIR = DATA_DIR / "pretrain_prepared"
 PRETRAIN_RESULTS_DIR = DATA_DIR / "pretrain_results"
 # Every patient of patient_sequence tokenized with the pretrained tokenizer (step 5b); read by
-# steps 6 (tokenized mode), 8, 9, 10a and 15 through tokenized_full_dataset_path.
+# steps 8, 9, 10a and 15 through tokenized_full_dataset_path.
 FULL_TOKENIZED_DIR = DATA_DIR / "full_tokenized"
 
 FINETUNE_PREPARED_DIR = DATA_DIR / "finetune_prepared"
@@ -121,15 +124,16 @@ def linear_probe_features_dir(label: str) -> Path:
     return linear_probe_dir(label) / "features"
 
 
-COHORT_DIR = OMOP_DIR / "ad_cohort"
-# The labeled cohort is split up front (step 6) into a fine-tuning set and a held-out
-# test set, each in its own folder (cohort_folder reads *.parquet from a single folder).
-COHORT_FINETUNE_DIR = COHORT_DIR / "finetune"
-COHORT_TEST_DIR = COHORT_DIR / "test"
-COHORT_FINETUNE_FILE = COHORT_FINETUNE_DIR / "cohort.parquet"
-COHORT_TEST_FILE = COHORT_TEST_DIR / "cohort.parquet"
-# One row per cohort patient with split in {train, val, test}; test equals COHORT_TEST_FILE.
+# Labeled cohort (step 6), built from the OMOP tables only: one row per patient with
+# person_id, index_date, label and split in {train, val, test}.
+COHORT_DIR = DATA_DIR / "cohort"
 COHORT_SPLITS_FILE = COHORT_DIR / "splits.parquet"
+
+# Cohort folders read by the CEHR-BERT finetune runner (cohort_folder reads *.parquet from one
+# folder); derived from the splits file by step 02b.
+CEHRBERT_COHORT_DIR = CEHRBERT_DATA_DIR / "cohort"
+CEHRBERT_COHORT_FINETUNE_DIR = CEHRBERT_COHORT_DIR / "finetune"
+CEHRBERT_COHORT_TEST_DIR = CEHRBERT_COHORT_DIR / "test"
 
 
 def report_dir_for(step_name: str) -> Path:

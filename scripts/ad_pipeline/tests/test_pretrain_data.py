@@ -1,4 +1,4 @@
-"""Tests for pretraining without the test patients: steps 3b, 4 (preflight), 5, 5b and 6 (sequence mode)."""
+"""Tests for pretraining without the test patients: steps 3b, 4 (preflight), 5 and 5b."""
 
 from __future__ import annotations
 
@@ -11,7 +11,6 @@ import polars as pl
 import pyarrow.parquet as pq
 import pytest
 import yaml
-from conftest import write_spark_sequences
 
 from pipeline import pretrain_data as pd_
 
@@ -36,70 +35,6 @@ def _splits_file(tmp_path: Path, persons=range(1, 13), test=TEST_IDS, val=VAL_ID
         }
     ).write_parquet(path)
     return path
-
-
-# --------------------------------------------------------------------------- #
-# Step 6: intersect with the raw sequences
-# --------------------------------------------------------------------------- #
-def _run06(step, omop_dir, tmp_path, *extra):
-    mod = step("06_prepare_finetuning_data.py")
-    rep = tmp_path / "rep06"
-    rc = mod.main(
-        [
-            "--data-dir", str(omop_dir),
-            "--finetune-output", str(tmp_path / "ft" / "cohort.parquet"),
-            "--test-output", str(tmp_path / "te" / "cohort.parquet"),
-            "--splits-output", str(tmp_path / "splits.parquet"),
-            "--report-dir", str(rep),
-            *extra,
-        ]
-    )  # fmt: skip
-    return rc, rep
-
-
-def test_step06_sequence_mode_drops_patients_without_a_sequence(step, omop_dir, tmp_path):
-    # Cohort is persons 1..5. Person 3 has no sequence, person 4 an empty one.
-    seq = write_spark_sequences(tmp_path / "seq", [[1, 2], [4, 5, 6]], n_visits={4: 0})
-    rc, rep = _run06(step, omop_dir, tmp_path, "--patient-sequence-dir", str(seq))
-    assert rc == 0
-    metrics = _status(rep)["metrics"]
-    assert metrics["intersect_with"] == "sequences"
-    assert metrics["sequence_patients"] == 4
-    assert metrics["dropped_no_sequence"] == 2
-    assert metrics["cohort_size"] == 3
-    splits = pl.read_parquet(tmp_path / "splits.parquet")
-    assert set(splits["person_id"]) == {1, 2, 5}
-
-
-def test_step06_sequence_mode_is_the_default_and_matches_skip_when_nothing_drops(step, omop_dir, tmp_path):
-    seq = write_spark_sequences(tmp_path / "seq", [[1, 2, 3], [4, 5, 6]])
-    rc, _ = _run06(step, omop_dir, tmp_path / "a", "--patient-sequence-dir", str(seq))
-    assert rc == 0
-    rc, _ = _run06(step, omop_dir, tmp_path / "b", "--intersect-with", "none")
-    assert rc == 0
-    a = pl.read_parquet(tmp_path / "a" / "splits.parquet")
-    b = pl.read_parquet(tmp_path / "b" / "splits.parquet")
-    assert a.equals(b)
-
-
-def test_step06_sequence_mode_fails_without_sequences(step, omop_dir, tmp_path):
-    rc, rep = _run06(step, omop_dir, tmp_path, "--patient-sequence-dir", str(tmp_path / "missing"))
-    assert rc == 1
-    assert not (tmp_path / "splits.parquet").exists()
-
-
-def test_step06_tokenized_mode_uses_the_dataset(step, omop_dir, tmp_path):
-    datasets = pytest.importorskip("datasets")
-    tok = tmp_path / "full_tokenized"
-    datasets.DatasetDict(
-        {
-            "train": datasets.Dataset.from_dict({"person_id": [1, 2, 5]}),
-            "validation": datasets.Dataset.from_dict({"person_id": [4]}),
-        }
-    ).save_to_disk(str(tok))
-    rc, rep = _run06(step, omop_dir, tmp_path, "--intersect-with", "tokenized", "--tokenized-dataset-path", str(tok))
-    assert rc == 0
-    assert _status(rep)["metrics"]["dropped_no_sequence"] == 1
 
 
 # --------------------------------------------------------------------------- #
