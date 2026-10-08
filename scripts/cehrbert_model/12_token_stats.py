@@ -1,33 +1,25 @@
 #!/usr/bin/env python
-"""Step 14: Descriptive statistics of token counts and patient history length.
+"""Step 12: Descriptive statistics of token counts per patient sequence.
 
-Profiles two quantities that drive the modeling budget and cohort framing:
+  - Full-history: number of concepts per row in the CEHR-BERT ``patient_sequence`` parquet
+    (``concept_ids`` list length).
+  - Windowed: number of ``input_ids`` per row in the tokenized ``finetune_prepared`` DatasetDict
+    (train + validation).
 
-  (1) Token counts per patient sequence
-      - Full-history  : number of concepts per row in the CEHR-BERT
-                        ``patient_sequence`` parquet (``concept_ids`` list length).
-      - Windowed      : number of ``input_ids`` per row in the tokenized
-                        ``finetune_prepared`` DatasetDict (train + validation).
-      For each, the distribution (mean/percentiles/max) plus the share of
-      sequences exceeding the context length (``--ctx``) and exceeding 512.
-
-  (2) Patient history length in days
-      - history_days = index_date - first_visit_date, where the cohort
-        (index_date + label) comes from the canonical ``splits.parquet`` and
-        the first visit per person comes from ``visit_occurrence``.
-      Reported overall and split by label (cases vs controls).
+For each, the distribution (mean/percentiles/max) plus the share of sequences exceeding the context
+length (``--ctx``) and exceeding 512. Patient history length is a cohort property and lives in
+``data_qc/02_history_length_stats.py``.
 
 Outputs (under build/<run_label>/)
 -------
-  build/<label>/token_history_stats.json
+  build/<label>/token_stats.json
   build/<label>/figures/token_length_hist.png
-  build/<label>/figures/history_length_hist.png
-  build/<label>/reports/14_token_history_stats/{status.json,report.md}
+  build/<label>/reports/12_token_stats/{status.json,report.md}
 
 Usage
 -----
-  python 14_token_history_stats.py
-  python 14_token_history_stats.py --window-days 365 --ctx 512
+  python cehrbert_model/12_token_stats.py
+  python cehrbert_model/12_token_stats.py --window-days 365 --ctx 512
 """
 
 from __future__ import annotations
@@ -45,11 +37,10 @@ import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
 import polars as pl  # noqa: E402
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from pipeline import paths  # noqa: E402
 from pipeline.dataset_checks import datasets_available, resolve_prepared_path  # noqa: E402
-from pipeline.omop_validation import table_glob  # noqa: E402
 from pipeline.reporting import StepReport  # noqa: E402
 
 PERCENTILES = [50, 75, 90, 95, 99]
@@ -123,36 +114,6 @@ def _windowed_token_lengths(prepared_dir: Path) -> dict[str, np.ndarray]:
     return per_split
 
 
-def _load_cohort(report: StepReport, splits_file: Path) -> pl.DataFrame:
-    """Read the canonical splits file as (person_id, index_date, label)."""
-    if not splits_file.is_file():
-        return pl.DataFrame(schema={"person_id": pl.Int64, "index_date": pl.Date, "label": pl.Int64})
-    df = pl.read_parquet(splits_file, columns=["person_id", "index_date", "label"]).with_columns(
-        pl.col("index_date").cast(pl.Date),
-        pl.col("label").cast(pl.Int64),
-    )
-    report.add_metric("cohort_rows", df.height)
-    return df
-
-
-def _history_days(cohort: pl.DataFrame, data_dir: Path) -> pl.DataFrame:
-    """Join cohort to first visit_start_date per person and compute history_days."""
-    vo_glob = table_glob(data_dir, "visit_occurrence")
-    if vo_glob is None:
-        raise FileNotFoundError(f"visit_occurrence not found under {data_dir}")
-    vo_files = sorted(globmod.glob(vo_glob))
-    first_visit = (
-        pl.read_parquet(vo_files, columns=["person_id", "visit_start_date"])
-        .with_columns(pl.col("visit_start_date").cast(pl.Date))
-        .group_by("person_id")
-        .agg(pl.col("visit_start_date").min().alias("first_visit"))
-    )
-    joined = cohort.join(first_visit, on="person_id", how="inner").with_columns(
-        (pl.col("index_date") - pl.col("first_visit")).dt.total_days().alias("history_days")
-    )
-    return joined.filter(pl.col("history_days").is_not_null())
-
-
 def _plot_token_hist(full: np.ndarray, windowed: np.ndarray | None, ctx: int, out: Path) -> Path:
     out.parent.mkdir(parents=True, exist_ok=True)
     fig, ax = plt.subplots(figsize=(8, 5))
@@ -178,36 +139,12 @@ def _plot_token_hist(full: np.ndarray, windowed: np.ndarray | None, ctx: int, ou
     return out
 
 
-def _plot_history_hist(history: pl.DataFrame, out: Path) -> Path:
-    out.parent.mkdir(parents=True, exist_ok=True)
-    days = history.get_column("history_days").to_numpy().astype(np.float64)
-    cases = history.filter(pl.col("label") == 1).get_column("history_days").to_numpy().astype(np.float64)
-    controls = history.filter(pl.col("label") == 0).get_column("history_days").to_numpy().astype(np.float64)
-    fig, ax = plt.subplots(figsize=(8, 5))
-    hi = float(np.percentile(days, 99)) if days.size else 1.0
-    bins = np.linspace(0, max(hi, 1.0), 60)
-    if controls.size:
-        ax.hist(controls, bins=bins, alpha=0.55, label=f"controls (n={controls.size})", color="#3b6ea5")
-    if cases.size:
-        ax.hist(cases, bins=bins, alpha=0.55, label=f"cases (n={cases.size})", color="#c0504d")
-    ax.set_xlabel("patient history length (days)")
-    ax.set_ylabel("number of patients")
-    ax.set_title("Patient history length: cases vs controls")
-    ax.legend()
-    fig.tight_layout()
-    fig.savefig(out, dpi=300)
-    plt.close(fig)
-    return out
-
-
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Token-count and history-length statistics")
+    parser = argparse.ArgumentParser(description="Token-count statistics")
     parser.add_argument("--window-days", type=int, default=paths.DEFAULT_WINDOW_DAYS)
     parser.add_argument("--ctx", type=int, default=paths.DEFAULT_CTX)
-    parser.add_argument("--data-dir", default=str(paths.OMOP_DIR))
     parser.add_argument("--patient-sequence-dir", default=str(paths.PATIENT_SEQUENCE_DIR))
     parser.add_argument("--prepared-dir", default=str(paths.FINETUNE_PREPARED_DIR))
-    parser.add_argument("--splits-file", default=str(paths.COHORT_SPLITS_FILE))
     parser.add_argument("--results-dir", default=None)
     parser.add_argument("--figures-dir", default=None)
     parser.add_argument("--report-dir", default=None)
@@ -216,13 +153,11 @@ def main(argv: list[str] | None = None) -> int:
     label = paths.run_label(args.window_days, args.ctx)
     results_dir = Path(args.results_dir) if args.results_dir else paths.eval_results_dir(label)
     figures_dir = Path(args.figures_dir) if args.figures_dir else paths.figures_dir(label)
-    report_dir = (
-        Path(args.report_dir) if args.report_dir else paths.build_report_dir_for("14_token_history_stats", label)
-    )
+    report_dir = Path(args.report_dir) if args.report_dir else paths.build_report_dir_for("12_token_stats", label)
 
     report = StepReport(
-        "14_token_history_stats",
-        title="Step 14 - Token-count and history-length statistics",
+        "12_token_stats",
+        title="Step 12 - Token-count statistics",
     )
     report.add_metric("run_label", label)
     report.add_metric("ctx", args.ctx)
@@ -300,58 +235,13 @@ def main(argv: list[str] | None = None) -> int:
             report.warn("windowed dataset available", ok=False, detail=str(exc))
             payload["windowed_tokens"] = None
 
-    # --- (2) history length in days ---------------------------------------
-    cohort = _load_cohort(report, Path(args.splits_file))
-    history = pl.DataFrame(schema={"person_id": pl.Int64, "label": pl.Int64, "history_days": pl.Int64})
-    cohort_ok = cohort.height > 0
-    report.add_check("cohort readable", cohort_ok, detail=f"{cohort.height} cohort rows")
-    if cohort_ok:
-        try:
-            history = _history_days(cohort, Path(args.data_dir))
-        except Exception as exc:  # noqa: BLE001
-            report.add_check("history_days computed", False, detail=str(exc))
-
-    hist_all = (
-        history.get_column("history_days").to_numpy().astype(np.int64)
-        if history.height
-        else np.asarray([], dtype=np.int64)
-    )
-    cases = (
-        history.filter(pl.col("label") == 1).get_column("history_days").to_numpy().astype(np.int64)
-        if history.height
-        else np.asarray([], dtype=np.int64)
-    )
-    controls = (
-        history.filter(pl.col("label") == 0).get_column("history_days").to_numpy().astype(np.int64)
-        if history.height
-        else np.asarray([], dtype=np.int64)
-    )
-
-    payload["history_days"] = {
-        "overall": _describe(hist_all),
-        "cases": _describe(cases),
-        "controls": _describe(controls),
-    }
-    if history.height:
-        report.add_check(
-            "history_days computed",
-            hist_all.size > 0,
-            detail=f"overall {_fmt(_describe(hist_all))}",
-        )
-        report.add_metric("n_patients_history", int(hist_all.size))
-        report.add_metric("history_days_median", round(_describe(hist_all)["p50"]))
-        report.add_metric("history_days_p90", round(_describe(hist_all)["p90"]))
-
     # --- figures -----------------------------------------------------------
     tok_fig = _plot_token_hist(full_lengths, windowed_combined, args.ctx, figures_dir / "token_length_hist.png")
     report.add_artifact(tok_fig)
-    if history.height:
-        hist_fig = _plot_history_hist(history, figures_dir / "history_length_hist.png")
-        report.add_artifact(hist_fig)
 
     # --- write json --------------------------------------------------------
     results_dir.mkdir(parents=True, exist_ok=True)
-    json_path = results_dir / "token_history_stats.json"
+    json_path = results_dir / "token_stats.json"
     json_path.write_text(json.dumps(payload, indent=2, default=float), encoding="utf-8")
     report.add_artifact(json_path)
 
