@@ -27,7 +27,7 @@ models, so it is not part of the label.
 
 Per-concept features within the look-back window (conditions as presence/absence, drugs,
 procedures and measurements as occurrence counts) plus demographics (age at index, one-hot gender and race). Only visit-linked events count, the same
-rows the cohort rule and CEHR-BERT use (`ad_cohort._event_rows`); there are no visit or history length features. The
+rows the cohort rule and CEHR-BERT use (`ad_cohort._event_rows`); `history_length_days` (index date minus the earliest earlier visit, over all history regardless of the look-back window, imputed with the train median when a patient has no earlier visit) is also a feature; there is no visit count. The
 vocabulary is fit on train only and applied unchanged to val and test. A concept is kept when it is in
 the qualified set that CEHR-BERT and the cohort also use (standard concepts used by at least
 `MIN_CONCEPT_PATIENTS` persons, from `pipeline/omop_common.py`, pooled over condition, drug, procedure
