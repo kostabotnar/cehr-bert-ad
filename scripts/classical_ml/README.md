@@ -25,13 +25,13 @@ models, so it is not part of the label.
 
 ## Features (step 01)
 
-Per-concept features within the look-back window (conditions as presence/absence, drugs and
-procedures as occurrence counts) plus demographics (age at index, one-hot gender and race). The
+Per-concept features within the look-back window (conditions as presence/absence, drugs,
+procedures and measurements as occurrence counts) plus demographics (age at index, one-hot gender and race). Only visit-linked events count, the same
+rows the cohort rule and CEHR-BERT use (`ad_cohort._event_rows`); there are no visit or history length features. The
 vocabulary is fit on train only and applied unchanged to val and test. A concept is kept when it is in
 the qualified set that CEHR-BERT and the cohort also use (standard concepts used by at least
 `MIN_CONCEPT_PATIENTS` persons, from `pipeline/omop_common.py`, pooled over condition, drug, procedure
-and measurement events) and occurs in at least one training patient's window. Measurements are not
-features. The report records the threshold, the qualified concept count and the kept size per domain. The step fails when `data/cohort/splits.parquet` is missing.
+and measurement events) and occurs in at least one training patient's window. The report records the threshold, the qualified concept count and the kept size per domain. The step fails when `data/cohort/splits.parquet` is missing.
 
 ## Models (step 02)
 

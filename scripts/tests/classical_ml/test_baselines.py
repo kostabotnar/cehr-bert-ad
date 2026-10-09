@@ -87,7 +87,11 @@ def _write_table(root: Path, table: str, rows: dict, schema: dict) -> None:
     pl.DataFrame(rows, schema=schema).write_parquet(d / "data.parquet")
 
 
-def _write_omop(root: Path, person, cond, drug, proc, visit) -> Path:
+def _write_omop(root: Path, person, cond, drug, proc, meas=()) -> Path:
+    """Event rows are (person_id, concept_id, date) or (person_id, concept_id, date, visit_occurrence_id).
+
+    Rows without a visit id get visit 1; pass an explicit ``None`` for an event not linked to a visit.
+    """
     i64, date = pl.Int64, pl.Date
     _write_table(
         root,
@@ -99,19 +103,16 @@ def _write_omop(root: Path, person, cond, drug, proc, visit) -> Path:
         ("condition_occurrence", "condition_concept_id", "condition_start_date", cond),
         ("drug_exposure", "drug_concept_id", "drug_exposure_start_date", drug),
         ("procedure_occurrence", "procedure_concept_id", "procedure_date", proc),
+        ("measurement", "measurement_concept_id", "measurement_date", meas),
     ):
+        rows = [r if len(r) == 4 else (*r, 1) for r in rows]
+        cols = list(zip(*rows)) if rows else [[], [], [], []]
         _write_table(
             root,
             table,
-            dict(zip(["person_id", concept_col, date_col], zip(*rows))) | {"visit_occurrence_id": [1] * len(rows)},
+            dict(zip(["person_id", concept_col, date_col, "visit_occurrence_id"], cols)),
             {"person_id": i64, concept_col: i64, date_col: date, "visit_occurrence_id": i64},
         )
-    _write_table(
-        root,
-        "visit_occurrence",
-        dict(zip(["person_id", "visit_occurrence_id", "visit_start_date"], zip(*visit))),
-        {"person_id": i64, "visit_occurrence_id": i64, "visit_start_date": date},
-    )
     return root
 
 
@@ -128,18 +129,18 @@ def small_omop(tmp_path) -> Path:
             (1, 102, D(2019, 1, 1)),  # first day of the window: included
             (1, 103, D(2020, 3, 1)),  # after index: excluded
             (1, 0, D(2019, 6, 1)),  # concept 0: excluded
+            (1, 104, D(2019, 6, 1), None),  # not linked to a visit: excluded
             (2, 100, D(2019, 5, 1)),
             (9, 999, D(2019, 5, 1)),  # only a test patient has this concept
         ],
         drug=[(1, 200, D(2019, 12, 31)), (1, 200, D(2019, 12, 31)), (1, 201, D(2020, 2, 1))],
-        proc=[(1, 300, D(2019, 3, 1))],
-        visit=[
-            (1, 1, D(2015, 1, 1)),
-            (1, 2, D(2019, 6, 1)),
-            (1, 2, D(2019, 6, 1)),
-            (1, 3, INDEX),
-            (2, 4, D(2019, 5, 1)),
-            (9, 5, D(2019, 5, 1)),
+        proc=[(1, 300, D(2019, 3, 1)), (1, 301, D(2019, 3, 1), None)],
+        meas=[
+            (1, 400, D(2019, 4, 1)),
+            (1, 400, D(2019, 4, 2)),
+            (1, 400, D(2019, 4, 3), None),  # not linked to a visit: excluded
+            (1, 401, D(2020, 4, 1)),  # after index: excluded
+            (2, 400, D(2019, 4, 1)),
         ],
     )
 
@@ -156,7 +157,9 @@ def test_build_counts_strictly_before_index_and_within_window(small_omop):
         (1, "cond:102", 1),
         (1, "drug:200", 2),
         (1, "proc:300", 1),
+        (1, "meas:400", 2),
         (2, "cond:100", 1),
+        (2, "meas:400", 1),
         (9, "cond:999", 1),
     }
 
@@ -169,28 +172,44 @@ def test_build_counts_all_history_still_stops_before_index(small_omop):
         (1, "cond:102", 1),
         (1, "drug:200", 2),
         (1, "proc:300", 1),
+        (1, "meas:400", 2),
     }
 
 
-def test_build_visit_features(small_omop):
-    visit = bl.build_visit_features(_cohort([1, 2], index_date=INDEX), small_omop, 365).sort("person_id")
-    assert visit["history_length_days"].to_list() == [(INDEX - D(2015, 1, 1)).days, (INDEX - D(2019, 5, 1)).days]
-    assert visit["n_visits"].to_list() == [1, 1]
+def test_events_without_a_visit_are_not_counted_in_any_domain(small_omop):
+    counts = bl.build_counts(_cohort([1, 2, 9], index_date=INDEX), small_omop, -1)
+    features = set(counts.get_column("feature").to_list())
+    assert not features & {"cond:104", "proc:301"}
+    assert (
+        dict(zip(counts.filter(pl.col("person_id") == 1)["feature"], counts.filter(pl.col("person_id") == 1)["count"]))[
+            "meas:400"
+        ]
+        == 2
+    )  # the third measurement has no visit
+
+
+def test_measurements_become_meas_count_features(small_omop):
+    assert ("meas", "measurement", "measurement_concept_id", "measurement_date") in bl.DOMAINS
+    assert bl.DOMAIN_ENCODING["meas"] == "count"
+    spec = _fit(small_omop, [400])
+    assert spec.code_features == ["meas:400"]
+    train = _cohort([1, 2], index_date=INDEX)
+    X, _, _, _ = bl.assemble_matrix(
+        train, bl.build_counts(train, small_omop, 365), bl.build_demographics(train, small_omop), spec
+    )
+    assert X.toarray()[:, 0].tolist() == [2.0, 1.0]
 
 
 def _fit(small_omop, qualified):
     train = _cohort([1, 2], index_date=INDEX)
     counts = bl.build_counts(train, small_omop, 365)
     demo = bl.build_demographics(train, small_omop)
-    visit = bl.build_visit_features(train, small_omop, 365)
-    return bl.fit_feature_spec(
-        counts, demo, pl.Series("concept_id", qualified, dtype=pl.Int64), 100, 365, visit_features=visit
-    )
+    return bl.fit_feature_spec(counts, demo, pl.Series("concept_id", qualified, dtype=pl.Int64), 100, 365)
 
 
 def test_vocabulary_fit_on_train_only(small_omop):
-    spec = _fit(small_omop, [100, 102, 200, 300, 999])
-    assert spec.code_features == ["cond:100", "cond:102", "drug:200", "proc:300"]
+    spec = _fit(small_omop, [100, 102, 200, 300, 400, 999])
+    assert spec.code_features == ["cond:100", "cond:102", "drug:200", "meas:400", "proc:300"]
     assert "cond:999" not in spec.feature_names  # qualified, but only a test patient has it
     assert spec.gender_categories == [8507, 8532]
     assert spec.min_concept_patients == 100
@@ -220,6 +239,16 @@ def test_feature_spec_json_round_trip_and_old_spec_error(small_omop):
     old = {k: v for k, v in spec.to_json().items() if k != "min_concept_patients"} | {"min_prevalence": 0.01}
     with pytest.raises(ValueError, match="rerun classical_ml/01_prepare_features.py"):
         bl.FeatureSpec.from_json(old)
+    with pytest.raises(ValueError, match="rerun classical_ml/01_prepare_features.py"):
+        bl.FeatureSpec.from_json(spec.to_json() | {"history_median": 3.0})
+    with pytest.raises(ValueError, match="rerun classical_ml/01_prepare_features.py"):
+        bl.FeatureSpec.from_json(spec.to_json() | {"nvisits_median": 1.0})
+
+
+def test_feature_names_have_no_history_or_visit_columns(small_omop):
+    names = _fit(small_omop, [100, 200, 400]).feature_names
+    assert not [n for n in names if "history" in n or "visit" in n]
+    assert names[-4:] == ["age", "gender:8507", "gender:8532", "race:8527"]
 
 
 def test_assemble_matrix_width_and_values(small_omop):
@@ -232,7 +261,6 @@ def test_assemble_matrix_width_and_values(small_omop):
         bl.build_counts(test, small_omop, 365),
         bl.build_demographics(test, small_omop),
         spec,
-        visit=bl.build_visit_features(test, small_omop, 365),
     )
     assert X.shape == (1, len(names))
     row = dict(zip(names, X.toarray()[0]))
@@ -303,8 +331,7 @@ def _random_omop(root: Path, n: int, seed: int = 0) -> list[tuple[int, int]]:
 
     rng = np.random.default_rng(seed)
     labels = [(pid, int(pid % 3 == 0)) for pid in range(1, n + 1)]
-    person, cond, drug, proc, visit = [], [], [], [], []
-    vid = 0
+    person, cond, drug, proc, meas = [], [], [], [], []
     for pid, label in labels:
         person.append((pid, int(rng.choice([8507, 8532])), 8527, int(rng.integers(1930, 1960))))
         for _ in range(int(rng.integers(2, 6))):
@@ -313,9 +340,8 @@ def _random_omop(root: Path, n: int, seed: int = 0) -> list[tuple[int, int]]:
             cond.append((pid, concept, day))
             drug.append((pid, int(rng.integers(20, 24)), day))
             proc.append((pid, int(rng.integers(30, 33)), day))
-            vid += 1
-            visit.append((pid, vid, day))
-    _write_omop(root, person, cond, drug, proc, visit)
+            meas.append((pid, int(rng.integers(40, 43)), day))
+    _write_omop(root, person, cond, drug, proc, meas)
     return labels
 
 

@@ -12,7 +12,8 @@ this module builds directly from the OMOP source tables, **frozen strictly befor
 patient's index_date** and limited to a fixed look-back window (365 days, matching
 ``observation_window`` in ``ad_finetune_config.yaml``):
 
-  * per-concept occurrence **counts** for condition / drug / procedure domains
+  * per-concept occurrence **counts** for condition / drug / procedure / measurement domains,
+    limited to visit-linked events (the rows ``ad_cohort._event_rows`` returns)
   * demographics: age at index, one-hot gender, one-hot race
 
 The vocabulary (which concepts become columns) and the demographic categories are fit on
@@ -38,15 +39,23 @@ import polars as pl
 import scipy.sparse as sp
 
 from . import paths
+from .ad_cohort import EVENT_TABLES, _event_rows
 from .omop_validation import table_glob
 
 logger = logging.getLogger(__name__)
 
+# Feature-name prefix of each event table. The tables, columns and the event rule come from
+# ``ad_cohort.EVENT_TABLES`` / ``ad_cohort._event_rows``, the definition CEHR-BERT also uses.
+DOMAIN_PREFIX: Dict[str, str] = {
+    "condition_occurrence": "cond",
+    "drug_exposure": "drug",
+    "procedure_occurrence": "proc",
+    "measurement": "meas",
+}
+
 # Domains contributing count features: (feature-prefix, table, concept column, date column).
 DOMAINS: List[Tuple[str, str, str, str]] = [
-    ("cond", "condition_occurrence", "condition_concept_id", "condition_start_date"),
-    ("drug", "drug_exposure", "drug_concept_id", "drug_exposure_start_date"),
-    ("proc", "procedure_occurrence", "procedure_concept_id", "procedure_date"),
+    (DOMAIN_PREFIX[table], table, concept_col, date_col) for table, date_col, concept_col in EVENT_TABLES
 ]
 
 DEFAULT_WINDOW_DAYS = 365
@@ -54,7 +63,7 @@ DEFAULT_WINDOW_DAYS = 365
 # Per-domain feature encoding. Conditions become presence/absence indicators (binary),
 # while drugs and procedures keep their raw occurrence counts. ``assemble_matrix`` maps a
 # feature's "<domain>:<concept_id>" prefix through this table (default "count" if unknown).
-DOMAIN_ENCODING: Dict[str, str] = {"cond": "binary", "drug": "count", "proc": "count"}
+DOMAIN_ENCODING: Dict[str, str] = {"cond": "binary", "drug": "count", "proc": "count", "meas": "count"}
 
 
 # --------------------------------------------------------------------------- #
@@ -104,6 +113,10 @@ def _require_glob(data_dir: Path, table: str) -> str | None:
 def build_counts(cohort: pl.DataFrame, data_dir: str | Path, window_days: int) -> pl.DataFrame:
     """Per-(person, concept) occurrence counts strictly before each ``index_date``.
 
+    The events are exactly the rows ``ad_cohort._event_rows`` returns for the tables of
+    ``ad_cohort.EVENT_TABLES`` (visit linked, concept present and not 0, date present except for
+    measurement), so the baselines and CEHR-BERT share one definition of an event.
+
     When ``window_days`` is ``None`` or negative the look-back is unbounded ("all history"):
     only the upper bound ``event_date < index_date`` is applied. Otherwise events are limited
     to ``[index_date - window_days, index_date)``.
@@ -113,23 +126,17 @@ def build_counts(cohort: pl.DataFrame, data_dir: str | Path, window_days: int) -
     """
     data_dir = Path(data_dir)
     unbounded = window_days is None or window_days < 0
-    index = cohort.lazy().select("person_id", "index_date")
+    index = cohort.lazy().select(pl.col("person_id").cast(pl.Int64), "index_date")
     parts: List[pl.LazyFrame] = []
     for prefix, table, concept_col, date_col in DOMAINS:
-        glob = _require_glob(data_dir, table)
-        if glob is None:
+        rows = _event_rows(data_dir, table, date_col, concept_col)
+        if rows is None:
             continue
-        date_filter = pl.col("event_date") < pl.col("index_date")
+        date_filter = pl.col("date") < pl.col("index_date")
         if not unbounded:
-            date_filter = date_filter & (pl.col("event_date") >= pl.col("index_date") - pl.duration(days=window_days))
+            date_filter = date_filter & (pl.col("date") >= pl.col("index_date") - pl.duration(days=window_days))
         events = (
-            pl.scan_parquet(glob)
-            .select(
-                pl.col("person_id").cast(pl.Int64),
-                pl.col(concept_col).cast(pl.Int64).alias("concept_id"),
-                pl.col(date_col).cast(pl.Date).alias("event_date"),
-            )
-            .filter(pl.col("concept_id").is_not_null() & (pl.col("concept_id") != 0))
+            rows.select(pl.col("person_id").cast(pl.Int64), pl.col("date").cast(pl.Date), "concept_id")
             .join(index, on="person_id", how="inner")
             .filter(date_filter)
             .group_by("person_id", "concept_id")
@@ -142,76 +149,6 @@ def build_counts(cohort: pl.DataFrame, data_dir: str | Path, window_days: int) -
     if not parts:
         return pl.DataFrame(schema={"person_id": pl.Int64, "feature": pl.Utf8, "count": pl.Int64})
     return pl.concat(parts).collect()
-
-
-def build_visit_features(cohort: pl.DataFrame, data_dir: str | Path, window_days: int) -> pl.DataFrame:
-    """Confound-control utilization features from ``visit_occurrence``.
-
-    Returns one row per cohort person with columns ``person_id, history_length_days,
-    n_visits``:
-
-      * ``history_length_days`` = full span ``index_date - earliest visit_start_date``
-        among visits *strictly before* ``index_date``. This is ALWAYS the unbounded record
-        length (window-INDEPENDENT) -- it is the record-length confound itself, so the
-        ``window_days`` look-back must never truncate it. Patients with no pre-index visit
-        get ``null``.
-      * ``n_visits`` = count of DISTINCT ``visit_occurrence_id`` in the look-back window.
-        When ``window_days`` is ``None`` or negative the window is unbounded (all visits
-        with ``visit_start_date < index_date``); otherwise it is
-        ``[index_date - window_days, index_date)``. Patients with none get ``0``.
-
-    Every cohort patient appears exactly once (left join), so callers can rely on the row
-    set matching the cohort regardless of which patients have visits.
-    """
-    data_dir = Path(data_dir)
-    index = cohort.select("person_id", "index_date").unique(subset="person_id")
-
-    glob = _require_glob(data_dir, "visit_occurrence")
-    if glob is None:
-        return index.select(
-            "person_id",
-            pl.lit(None, dtype=pl.Int64).alias("history_length_days"),
-            pl.lit(0, dtype=pl.Int64).alias("n_visits"),
-        )
-
-    unbounded = window_days is None or window_days < 0
-    visits = (
-        pl.scan_parquet(glob)
-        .select(
-            pl.col("person_id").cast(pl.Int64),
-            pl.col("visit_start_date").cast(pl.Date),
-            pl.col("visit_occurrence_id"),
-        )
-        .join(index.lazy(), on="person_id", how="inner")
-        .filter(pl.col("visit_start_date") < pl.col("index_date"))
-    )
-
-    # history_length_days: ALWAYS the full pre-index span, independent of window_days.
-    history = (
-        visits.group_by("person_id")
-        .agg(earliest=pl.col("visit_start_date").min())
-        .join(index.lazy(), on="person_id", how="inner")
-        .select(
-            "person_id",
-            (pl.col("index_date") - pl.col("earliest")).dt.total_days().cast(pl.Int64).alias("history_length_days"),
-        )
-    )
-
-    # n_visits: DISTINCT visit_occurrence_id in the look-back window.
-    nvisits_src = visits
-    if not unbounded:
-        nvisits_src = nvisits_src.filter(
-            pl.col("visit_start_date") >= pl.col("index_date") - pl.duration(days=window_days)
-        )
-    nvisits = nvisits_src.group_by("person_id").agg(n_visits=pl.col("visit_occurrence_id").n_unique().cast(pl.Int64))
-
-    return (
-        index.select("person_id")
-        .join(history.collect(), on="person_id", how="left")
-        .join(nvisits.collect(), on="person_id", how="left")
-        .with_columns(pl.col("n_visits").fill_null(0).cast(pl.Int64))
-        .select("person_id", "history_length_days", "n_visits")
-    )
 
 
 def build_demographics(cohort: pl.DataFrame, data_dir: str | Path) -> pl.DataFrame:
@@ -250,8 +187,6 @@ class FeatureSpec:
     min_concept_patients: int  # threshold that produced the qualified concept set
     window_days: int
     domain_encoding: Dict[str, str]  # domain prefix -> "binary" | "count"
-    history_median: float = 0.0  # median history_length_days (confound control)
-    nvisits_median: float = 0.0  # median n_visits (confound control)
 
     @property
     def feature_names(self) -> List[str]:
@@ -259,8 +194,6 @@ class FeatureSpec:
         names.append("age")
         names += [f"gender:{g}" for g in self.gender_categories]
         names += [f"race:{r}" for r in self.race_categories]
-        names.append("history_length_days")
-        names.append("n_visits")
         return names
 
     def to_json(self) -> dict:
@@ -272,8 +205,6 @@ class FeatureSpec:
             "min_concept_patients": self.min_concept_patients,
             "window_days": self.window_days,
             "domain_encoding": dict(self.domain_encoding),
-            "history_median": self.history_median,
-            "nvisits_median": self.nvisits_median,
             "n_features": len(self.feature_names),
         }
 
@@ -284,6 +215,11 @@ class FeatureSpec:
                 "feature_spec.json was written by an older step 01 (min_prevalence vocabulary); "
                 "rerun classical_ml/01_prepare_features.py to rebuild the features"
             )
+        if "history_median" in d or "nvisits_median" in d:
+            raise ValueError(
+                "feature_spec.json still has the history_length_days / n_visits features, which were removed; "
+                "rerun classical_ml/01_prepare_features.py to rebuild the features"
+            )
         return cls(
             code_features=list(d["code_features"]),
             gender_categories=list(d["gender_categories"]),
@@ -292,8 +228,6 @@ class FeatureSpec:
             min_concept_patients=int(d["min_concept_patients"]),
             window_days=int(d["window_days"]),
             domain_encoding=dict(d.get("domain_encoding", DOMAIN_ENCODING)),
-            history_median=float(d.get("history_median", 0.0)),
-            nvisits_median=float(d.get("nvisits_median", 0.0)),
         )
 
 
@@ -304,17 +238,11 @@ def fit_feature_spec(
     min_concept_patients: int,
     window_days: int,
     domain_encoding: Dict[str, str] = DOMAIN_ENCODING,
-    visit_features: pl.DataFrame | None = None,
 ) -> FeatureSpec:
     """Select the kept concept vocabulary + demographic categories from training data only.
 
     A concept is kept when it is in ``qualified`` (concept ids from ``ad_cohort.qualified_concepts``)
     and occurs in at least one training window; ``min_concept_patients`` is only recorded on the spec.
-
-    When ``visit_features`` (output of :func:`build_visit_features`) is supplied, the median
-    ``history_length_days`` (ignoring nulls) and median ``n_visits`` are stored on the spec
-    so missing values can be imputed consistently at assembly time. Empty/absent input
-    leaves the medians at ``0.0``.
     """
     if train_counts.height:
         concept = pl.col("feature").str.split(":").list.last().cast(pl.Int64)
@@ -345,17 +273,6 @@ def fit_feature_spec(
     )
     age_median = float(train_demo.get_column("age").median() or 0.0)
 
-    history_median = 0.0
-    nvisits_median = 0.0
-    if visit_features is not None and visit_features.height:
-        history_median = float(
-            visit_features.filter(pl.col("history_length_days").is_not_null())
-            .get_column("history_length_days")
-            .median()
-            or 0.0
-        )
-        nvisits_median = float(visit_features.get_column("n_visits").median() or 0.0)
-
     return FeatureSpec(
         code_features=code_features,
         gender_categories=[int(g) for g in gender],
@@ -364,8 +281,6 @@ def fit_feature_spec(
         min_concept_patients=min_concept_patients,
         window_days=window_days,
         domain_encoding=dict(domain_encoding),
-        history_median=history_median,
-        nvisits_median=nvisits_median,
     )
 
 
@@ -374,19 +289,12 @@ def assemble_matrix(
     counts: pl.DataFrame,
     demo: pl.DataFrame,
     spec: FeatureSpec,
-    visit: pl.DataFrame | None = None,
 ) -> Tuple[sp.csr_matrix, np.ndarray, np.ndarray, np.ndarray]:
     """Build the sparse design matrix for ``cohort`` using a fitted ``spec``.
 
     Returns (X, y, person_ids, index_dates). Row order follows ``cohort`` (sorted by
     person_id). Columns follow ``spec.feature_names``: code counts, then age, gender
-    one-hots, race one-hots, then the two confound-control columns
-    ``history_length_days`` and ``n_visits`` (from ``visit``, the output of
-    :func:`build_visit_features`). Missing ``history_length_days`` is imputed with
-    ``spec.history_median``; missing ``n_visits`` is ``0.0`` (no in-window visit genuinely
-    means zero). When ``visit`` is ``None`` both columns are still created (history filled
-    with ``spec.history_median``, n_visits ``0.0``) so the matrix width always equals
-    ``len(spec.feature_names)``.
+    one-hots, race one-hots.
     """
     cohort = cohort.sort("person_id")
     person_ids = cohort.get_column("person_id").to_numpy()
@@ -436,18 +344,7 @@ def assemble_matrix(
     gender_oh = _one_hot("gender_concept_id", spec.gender_categories)
     race_oh = _one_hot("race_concept_id", spec.race_categories)
 
-    # --- confound-control block: history_length_days | n_visits ------------
-    if visit is not None:
-        vj = cohort.select("person_id").join(visit, on="person_id", how="left")
-        history = vj.get_column("history_length_days").to_numpy().astype(np.float64)
-        history = np.where(np.isnan(history), spec.history_median, history).reshape(-1, 1)
-        n_visits = vj.get_column("n_visits").to_numpy().astype(np.float64)
-        n_visits = np.where(np.isnan(n_visits), 0.0, n_visits).reshape(-1, 1)
-    else:
-        history = np.full((n_rows, 1), float(spec.history_median), dtype=np.float64)
-        n_visits = np.zeros((n_rows, 1), dtype=np.float64)
-
-    demo_block = sp.csr_matrix(np.hstack([age, gender_oh, race_oh, history, n_visits]))
+    demo_block = sp.csr_matrix(np.hstack([age, gender_oh, race_oh]))
 
     X = sp.hstack([code_block, demo_block], format="csr")
     return X, y.astype(np.int64), person_ids, index_dates
