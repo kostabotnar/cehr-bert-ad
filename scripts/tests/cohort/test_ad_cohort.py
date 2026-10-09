@@ -80,11 +80,11 @@ def write_omop(root, persons, visits, ad=(), events=None):
         write(table, frame(events.get(table, []), date_col, concept_col))
 
 
-def candidates(visits, birth=D(1950, 7, 1)):
+def candidates(visits, birth=1950):
     """Eligible anchors of a single control with the given visit dates."""
     vd = pl.DataFrame({"person_id": [1] * len(visits), "visit_date": visits}).unique()
     ctrl = pl.DataFrame(
-        {"person_id": [1], "birth_date": [birth], "first_visit": [min(visits)], "last_visit": [max(visits)]}
+        {"person_id": [1], "year_of_birth": [birth], "first_visit": [min(visits)], "last_visit": [max(visits)]}
     )
     out, counts = ad_cohort.control_candidates(vd, ctrl, GAP, WINDOW, 50, FLOOR, FOLLOWUP)
     return out["anchor_date"].to_list(), counts
@@ -100,18 +100,34 @@ def test_candidate_needs_one_year_of_followup():
 
 
 def test_candidate_age_boundary():
-    # Index = 2015-01-01 - 365 days = 2014-01-01. Born 1964-01-01 is 50.0 years old then, 1964-02-01 is 49.9.
+    # Index = 2015-01-01 - 365 days = 2014-01-01, so age is 2014 minus year_of_birth whatever the birth month.
     visits = [D(2010, 1, 1), D(2013, 6, 1), D(2015, 1, 1), D(2016, 1, 1)]
-    assert D(2015, 1, 1) in candidates(visits, birth=D(1963, 7, 1))[0]
-    assert D(2015, 1, 1) not in candidates(visits, birth=D(1964, 7, 1))[0]
+    assert D(2015, 1, 1) in candidates(visits, birth=1964)[0]
+    assert D(2015, 1, 1) not in candidates(visits, birth=1965)[0]
+
+
+def test_age_is_index_year_minus_year_of_birth():
+    # Born December 1960, index 2010-01-15: 49.1 years old by date, but 2010 - 1960 = 50 by the year rule.
+    df = pl.DataFrame(
+        {
+            "person_id": [1, 2, 3],
+            "year_of_birth": [1960, 1961, None],
+            "anchor_date": [D(2010, 1, 15)] * 3,
+            "first_visit": [D(2000, 1, 1)] * 3,
+        },
+        schema_overrides={"year_of_birth": pl.Int64},
+    )
+    out = ad_cohort.add_rule_flags(df, 0, 30, 50, D(2000, 1, 1)).sort("person_id")
+    assert out["age"].to_list() == [50, 49, None]
+    assert out["ok_age"].to_list() == [True, False, False]
 
 
 def test_candidate_index_floor_is_inclusive():
     # 2000 is a leap year, so 2000-12-31 minus 365 days is 2000-01-01.
     ok = [D(1998, 1, 1), D(1999, 6, 1), D(2000, 12, 31), D(2002, 1, 1)]
-    assert D(2000, 12, 31) in candidates(ok, birth=D(1940, 7, 1))[0]
+    assert D(2000, 12, 31) in candidates(ok, birth=1940)[0]
     early = [D(1998, 1, 1), D(1999, 6, 1), D(2000, 12, 30), D(2002, 1, 1)]
-    assert D(2000, 12, 30) not in candidates(early, birth=D(1940, 7, 1))[0]
+    assert D(2000, 12, 30) not in candidates(early, birth=1940)[0]
 
 
 def test_candidate_history_must_cover_window():
