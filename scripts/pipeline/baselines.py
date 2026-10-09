@@ -15,6 +15,8 @@ patient's index_date** and limited to a fixed look-back window (365 days, matchi
   * per-concept occurrence **counts** for condition / drug / procedure / measurement domains,
     limited to visit-linked events (the rows ``ad_cohort._event_rows`` returns)
   * demographics: age at index, one-hot gender, one-hot race
+  * ``history_length_days``: days from the earliest earlier visit to the index date (record length),
+    always over all history, imputed with the train median when a patient has no earlier visit
 
 The vocabulary (which concepts become columns) and the demographic categories are fit on
 **train only**, then applied unchanged to val/test, so there is no train/test leakage. A concept
@@ -151,6 +153,35 @@ def build_counts(cohort: pl.DataFrame, data_dir: str | Path, window_days: int) -
     return pl.concat(parts).collect()
 
 
+def build_history_length(cohort: pl.DataFrame, data_dir: str | Path) -> pl.DataFrame:
+    """Record length per cohort person: columns ``person_id, history_length_days``.
+
+    ``history_length_days`` is ``index_date - earliest visit_start_date`` over visits strictly
+    before ``index_date``. It always spans all history (it does not depend on the look-back
+    window). Persons with no earlier visit get ``null``. Every cohort person appears exactly once.
+    """
+    data_dir = Path(data_dir)
+    index = cohort.select(pl.col("person_id").cast(pl.Int64), "index_date").unique(subset="person_id")
+
+    glob = _require_glob(data_dir, "visit_occurrence")
+    if glob is None:
+        return index.select("person_id", pl.lit(None, dtype=pl.Int64).alias("history_length_days"))
+
+    earliest = (
+        pl.scan_parquet(glob)
+        .select(pl.col("person_id").cast(pl.Int64), pl.col("visit_start_date").cast(pl.Date))
+        .join(index.lazy(), on="person_id", how="inner")
+        .filter(pl.col("visit_start_date") < pl.col("index_date"))
+        .group_by("person_id")
+        .agg(earliest=pl.col("visit_start_date").min())
+        .collect()
+    )
+    return index.join(earliest, on="person_id", how="left").select(
+        "person_id",
+        (pl.col("index_date") - pl.col("earliest")).dt.total_days().cast(pl.Int64).alias("history_length_days"),
+    )
+
+
 def build_demographics(cohort: pl.DataFrame, data_dir: str | Path) -> pl.DataFrame:
     """Per-person demographics: age at index, gender_concept_id, race_concept_id."""
     data_dir = Path(data_dir)
@@ -187,6 +218,7 @@ class FeatureSpec:
     min_concept_patients: int  # threshold that produced the qualified concept set
     window_days: int
     domain_encoding: Dict[str, str]  # domain prefix -> "binary" | "count"
+    history_median: float = 0.0  # train median history_length_days, imputes persons without an earlier visit
 
     @property
     def feature_names(self) -> List[str]:
@@ -194,6 +226,7 @@ class FeatureSpec:
         names.append("age")
         names += [f"gender:{g}" for g in self.gender_categories]
         names += [f"race:{r}" for r in self.race_categories]
+        names.append("history_length_days")
         return names
 
     def to_json(self) -> dict:
@@ -205,6 +238,7 @@ class FeatureSpec:
             "min_concept_patients": self.min_concept_patients,
             "window_days": self.window_days,
             "domain_encoding": dict(self.domain_encoding),
+            "history_median": self.history_median,
             "n_features": len(self.feature_names),
         }
 
@@ -215,10 +249,10 @@ class FeatureSpec:
                 "feature_spec.json was written by an older step 01 (min_prevalence vocabulary); "
                 "rerun classical_ml/01_prepare_features.py to rebuild the features"
             )
-        if "history_median" in d or "nvisits_median" in d:
+        if "history_median" not in d or "nvisits_median" in d:
             raise ValueError(
-                "feature_spec.json still has the history_length_days / n_visits features, which were removed; "
-                "rerun classical_ml/01_prepare_features.py to rebuild the features"
+                "feature_spec.json does not match the current features (it lacks history_median or still has "
+                "nvisits_median); rerun classical_ml/01_prepare_features.py to rebuild the features"
             )
         return cls(
             code_features=list(d["code_features"]),
@@ -228,6 +262,7 @@ class FeatureSpec:
             min_concept_patients=int(d["min_concept_patients"]),
             window_days=int(d["window_days"]),
             domain_encoding=dict(d.get("domain_encoding", DOMAIN_ENCODING)),
+            history_median=float(d["history_median"]),
         )
 
 
@@ -238,11 +273,16 @@ def fit_feature_spec(
     min_concept_patients: int,
     window_days: int,
     domain_encoding: Dict[str, str] = DOMAIN_ENCODING,
+    history: pl.DataFrame | None = None,
 ) -> FeatureSpec:
     """Select the kept concept vocabulary + demographic categories from training data only.
 
     A concept is kept when it is in ``qualified`` (concept ids from ``ad_cohort.qualified_concepts``)
     and occurs in at least one training window; ``min_concept_patients`` is only recorded on the spec.
+
+    When ``history`` (output of :func:`build_history_length`) is supplied, its median
+    ``history_length_days`` (ignoring nulls) is stored on the spec to impute missing values at
+    assembly time. Without it the median is ``0.0``.
     """
     if train_counts.height:
         concept = pl.col("feature").str.split(":").list.last().cast(pl.Int64)
@@ -273,6 +313,10 @@ def fit_feature_spec(
     )
     age_median = float(train_demo.get_column("age").median() or 0.0)
 
+    history_median = 0.0
+    if history is not None and history.height:
+        history_median = float(history.get_column("history_length_days").drop_nulls().median() or 0.0)
+
     return FeatureSpec(
         code_features=code_features,
         gender_categories=[int(g) for g in gender],
@@ -281,6 +325,7 @@ def fit_feature_spec(
         min_concept_patients=min_concept_patients,
         window_days=window_days,
         domain_encoding=dict(domain_encoding),
+        history_median=history_median,
     )
 
 
@@ -289,12 +334,15 @@ def assemble_matrix(
     counts: pl.DataFrame,
     demo: pl.DataFrame,
     spec: FeatureSpec,
+    history: pl.DataFrame | None = None,
 ) -> Tuple[sp.csr_matrix, np.ndarray, np.ndarray, np.ndarray]:
     """Build the sparse design matrix for ``cohort`` using a fitted ``spec``.
 
     Returns (X, y, person_ids, index_dates). Row order follows ``cohort`` (sorted by
     person_id). Columns follow ``spec.feature_names``: code counts, then age, gender
-    one-hots, race one-hots.
+    one-hots, race one-hots, ``history_length_days`` (from ``history``, the output of
+    :func:`build_history_length`). A missing value, or ``history=None``, is imputed with
+    ``spec.history_median`` so the width always equals ``len(spec.feature_names)``.
     """
     cohort = cohort.sort("person_id")
     person_ids = cohort.get_column("person_id").to_numpy()
@@ -344,7 +392,14 @@ def assemble_matrix(
     gender_oh = _one_hot("gender_concept_id", spec.gender_categories)
     race_oh = _one_hot("race_concept_id", spec.race_categories)
 
-    demo_block = sp.csr_matrix(np.hstack([age, gender_oh, race_oh]))
+    if history is not None:
+        hj = cohort.select("person_id").join(history, on="person_id", how="left")
+        hist = hj.get_column("history_length_days").cast(pl.Float64).fill_null(spec.history_median).to_numpy()
+        hist = np.where(np.isnan(hist), spec.history_median, hist).reshape(-1, 1)
+    else:
+        hist = np.full((n_rows, 1), float(spec.history_median), dtype=np.float64)
+
+    demo_block = sp.csr_matrix(np.hstack([age, gender_oh, race_oh, hist]))
 
     X = sp.hstack([code_block, demo_block], format="csr")
     return X, y.astype(np.int64), person_ids, index_dates

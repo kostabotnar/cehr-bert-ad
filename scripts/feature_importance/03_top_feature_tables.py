@@ -62,6 +62,7 @@ DESCRIPTIONS = {
     "Visit/0": "Visit-type token (structural)",
     "Discharge/0": "Discharge token (structural)",
     "age": "Age at index date",
+    "history_length_days": "Record length: days from the earliest earlier visit to the index date",
     "gender:8507": "Male",
     "gender:8532": "Female",
 }
