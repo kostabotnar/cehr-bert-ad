@@ -15,7 +15,7 @@ Task framing ("predict AD anytime in the future"):
     dates, with >= --control-followup-days of observation after it. The anchor year is drawn so
     control anchor years follow the case anchor years (capped at cutoff minus follow-up).
     index_date = anchor minus GAP days.
-  * Inclusion, identical for both groups at index_date: age >= --min-age, index_date >=
+  * Inclusion, identical for both groups at index_date: age >= --min-age (index_date year minus year_of_birth), index_date >=
     --index-floor, first visit <= index_date minus --window-days, and >= 1 event in
     [index_date - window, index_date). An event is a condition, drug, procedure or measurement row
     linked to a visit whose standard concept is used by >= MIN_CONCEPT_PATIENTS persons (pipeline/omop_common.py, the same number as in cehrbert_model

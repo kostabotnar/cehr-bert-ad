@@ -25,7 +25,7 @@ case anchor years, limited to anchors up to the data cutoff (`cdm_source.source_
 the last visit) minus the follow-up; cases after that date stay in the cohort. Index = anchor minus
 `--gap-days`.
 
-Both groups must satisfy, at the index: age at least `--min-age`, index on or after `--index-floor`,
+Both groups must satisfy, at the index: age at least `--min-age` (calendar year of the index minus `year_of_birth`, as in the classical baselines), index on or after `--index-floor`,
 first visit at least `--window-days` earlier, and one condition, drug, procedure or measurement in
 the window `[index - window, index)`. An event counts only when it would become a CEHR-BERT sequence
 token: its `visit_occurrence_id` is not null and its standard concept id is not 0 and is used by at

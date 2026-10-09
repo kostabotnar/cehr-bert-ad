@@ -17,7 +17,8 @@ have zero target weight are not drawn.
 
 Inclusion rules, applied identically on the final index
 -------------------------------------------------------
-1. age >= ``min_age`` at the index date; 2. index >= ``index_floor``; 3. first visit <=
+1. age >= ``min_age`` at the index date, where age is the calendar year of the index date minus
+``year_of_birth`` (the same definition as the classical baselines; persons without year_of_birth fail); 2. index >= ``index_floor``; 3. first visit <=
 index - ``window_days``; 4. at least one event (condition, drug, procedure or measurement) in the
 half-open window ``[index - window_days, index)`` that CEHR-BERT would turn into a sequence token: linked to
 a visit and with a standard concept used by at least ``min_concept_patients`` persons (see
@@ -33,7 +34,7 @@ from pathlib import Path
 import numpy as np
 import polars as pl
 
-from .omop_common import age_years_expr, birth_date_expr, fit_stratum_weights, scan_table, smd_continuous
+from .omop_common import fit_stratum_weights, scan_table, smd_continuous
 
 EVENT_TABLES = (
     ("condition_occurrence", "condition_start_date", "condition_concept_id"),
@@ -49,11 +50,13 @@ _BAND = 0
 
 
 def read_persons(data_dir: Path) -> pl.DataFrame:
-    """person_id and birth_date for every person."""
-    lf = scan_table(data_dir, "person", ["person_id", "year_of_birth", "month_of_birth", "day_of_birth"])
+    """person_id and year_of_birth (Int64, null when missing) for every person."""
+    lf = scan_table(data_dir, "person", ["person_id", "year_of_birth"])
     if lf is None:
         raise FileNotFoundError(f"No parquet found for table 'person' under {data_dir}")
-    return lf.select("person_id", birth_date_expr().alias("birth_date")).unique("person_id").collect(engine="streaming")
+    return (
+        lf.select("person_id", pl.col("year_of_birth").cast(pl.Int64)).unique("person_id").collect(engine="streaming")
+    )
 
 
 def read_release_date(data_dir: Path) -> dt.date | None:
@@ -74,7 +77,7 @@ def add_rule_flags(
     return (
         df.with_columns((pl.col("anchor_date") - pl.duration(days=gap_days)).alias("index_date"))
         .with_columns(
-            age_years_expr("index_date", "birth_date").alias("age"),
+            (pl.col("index_date").dt.year() - pl.col("year_of_birth")).alias("age"),
             (pl.col("index_date") >= index_floor).fill_null(False).alias("ok_index_floor"),
             (pl.col("first_visit") <= pl.col("index_date") - pl.duration(days=window_days))
             .fill_null(False)
@@ -193,7 +196,7 @@ def control_candidates(
 ) -> tuple[pl.DataFrame, dict[str, int]]:
     """Eligible (person_id, anchor_date) pairs of controls, plus candidate counts after each filter.
 
-    ``visit_dates``: distinct (person_id, visit_date). ``controls``: person_id, birth_date,
+    ``visit_dates``: distinct (person_id, visit_date). ``controls``: person_id, year_of_birth,
     first_visit, last_visit. A candidate date ``d`` must leave ``followup_days`` of observation after
     it and satisfy rules 1 to 3 plus a visit in ``[index - window, index)`` at index = d - gap.
     """
