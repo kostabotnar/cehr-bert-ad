@@ -11,7 +11,7 @@ writes ranked tables:
                 (positive pushes the prediction toward the positive/AD class).
   * XGBoost  -- ``feature_importances_`` (the booster's importance, gain-based by default).
 
-OMOP code features (``cond:<id>`` / ``drug:<id>`` / ``proc:<id>``) are mapped to a label via the
+OMOP code features (``cond:<id>`` / ``drug:<id>`` / ``proc:<id>`` / ``meas:<id>``) are mapped to a label via the
 OMOP CONCEPT table (``data/omop_data/concept/concept.parquet``, column ``concept_name``). NOTE:
 in this de-identified dataset ``concept_name`` is the *source vocabulary code* (e.g.
 ``ICD-10-CM:M17.11``, ``CPT:93892``, or a bare RxNorm/NDC number for drugs), not free text.
@@ -67,7 +67,7 @@ def _readable(feature: str, names: dict[str, str]) -> str:
     if ":" not in feature:
         return feature
     prefix, _, concept_id = feature.partition(":")
-    if prefix in ("cond", "drug", "proc") and concept_id in names:
+    if prefix in ("cond", "drug", "proc", "meas") and concept_id in names:
         return f"{prefix}: {names[concept_id]}"
     if prefix == "gender":
         return f"gender: {GENDER_LABELS.get(concept_id, concept_id)}"

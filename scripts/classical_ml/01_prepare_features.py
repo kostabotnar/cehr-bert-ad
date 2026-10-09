@@ -9,7 +9,7 @@ partition CEHR-BERT used so the downstream comparison is apples-to-apples:
     written by cohort step 01 (``data/cohort/splits.parquet``); the step fails when it is missing
   * features frozen strictly before each patient's ``index_date``, within a fixed
     look-back window (default 365 days = ad_finetune_config observation_window)
-  * per-concept features (condition presence/absence, drug and procedure occurrence counts)
+  * per-concept features (condition presence/absence, drug, procedure and measurement occurrence counts, visit-linked events only)
     + demographics (age at index, one-hot gender, one-hot race)
   * vocabulary fit on TRAIN only: a concept is kept when it is in the qualified set shared with the
     cohort and CEHR-BERT (``ad_cohort.qualified_concepts`` with ``omop_common.MIN_CONCEPT_PATIENTS``)
@@ -116,12 +116,6 @@ def main(argv: list[str] | None = None) -> int:
         n: bl.build_demographics(df, data_dir)
         for n, df in (("train", splits.train), ("val", splits.val), ("test", splits.test))
     }
-    # confound-control utilization features: record length + visit count
-    visit = {
-        n: bl.build_visit_features(df, data_dir, args.window_days)
-        for n, df in (("train", splits.train), ("val", splits.val), ("test", splits.test))
-    }
-
     qualified = ad_cohort.qualified_concepts(data_dir, MIN_CONCEPT_PATIENTS)
     report.add_metric("qualified_concepts", qualified.len())
 
@@ -133,7 +127,6 @@ def main(argv: list[str] | None = None) -> int:
         min_concept_patients=MIN_CONCEPT_PATIENTS,
         window_days=args.window_days,
         domain_encoding=bl.DOMAIN_ENCODING,
-        visit_features=visit["train"],
     )
     report.add_metric("n_code_features", len(spec.code_features))
     report.add_metric("n_features_total", len(spec.feature_names))
@@ -141,8 +134,6 @@ def main(argv: list[str] | None = None) -> int:
         report.add_metric(f"n_{prefix}_features", sum(f.startswith(f"{prefix}:") for f in spec.code_features))
     report.add_metric("n_gender_categories", len(spec.gender_categories))
     report.add_metric("n_race_categories", len(spec.race_categories))
-    report.add_metric("train_history_median", round(spec.history_median, 2))
-    report.add_metric("train_nvisits_median", round(spec.nvisits_median, 2))
     report.add_check(
         "at least one code feature kept",
         len(spec.code_features) > 0,
@@ -152,7 +143,7 @@ def main(argv: list[str] | None = None) -> int:
 
     cohorts = {"train": splits.train, "val": splits.val, "test": splits.test}
     for name in ("train", "val", "test"):
-        X, y, pids, idates = bl.assemble_matrix(cohorts[name], counts[name], demo[name], spec, visit=visit[name])
+        X, y, pids, idates = bl.assemble_matrix(cohorts[name], counts[name], demo[name], spec)
         bl.save_split(out_dir, name, X, y, pids, idates)
         cells = X.shape[0] * X.shape[1]
         density = X.nnz / cells if cells else 0.0

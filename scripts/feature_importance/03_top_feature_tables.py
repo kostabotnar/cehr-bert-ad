@@ -62,7 +62,6 @@ DESCRIPTIONS = {
     "Visit/0": "Visit-type token (structural)",
     "Discharge/0": "Discharge token (structural)",
     "age": "Age at index date",
-    "n_visits": "Number of visits in look-back window",
     "gender:8507": "Male",
     "gender:8532": "Female",
 }
@@ -76,7 +75,7 @@ def _concept_lookup(concept_table: Path) -> dict[str, str]:
 def _source_code(feature_or_id: str, codes: dict[str, str]) -> str:
     """Resolve a baseline feature ('cond:1845') or attention concept_id to its source code."""
     s = str(feature_or_id)
-    if ":" in s and s.split(":")[0] in ("cond", "drug", "proc"):
+    if ":" in s and s.split(":")[0] in ("cond", "drug", "proc", "meas"):
         prefix, _, cid = s.partition(":")
         return codes.get(cid, cid)
     return codes.get(s, s)  # attention concept_id may be a bare OMOP id or a structural token
