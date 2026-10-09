@@ -130,7 +130,10 @@ def extract_cohort_sequences(
         batch_size=data_args.preprocessing_batch_size,
         num_proc=data_args.preprocessing_num_workers,
     )
-    person_index_date_agg = cohort.group_by("person_id").agg(pl.struct("index_date", "label").alias("index_date_label"))
+    # An optional age_at_index column (age at the index date) is carried per entry; see
+    # ExtractTokenizedSequenceDataMapping.
+    entry_columns = ["index_date", "label"] + (["age_at_index"] if "age_at_index" in cohort.columns else [])
+    person_index_date_agg = cohort.group_by("person_id").agg(pl.struct(*entry_columns).alias("index_date_label"))
     # Convert to dictionary, normalizing index_date to a UTC POSIX timestamp (float) once here.
     # The cohort parquet may store index_date as either a date or a datetime; converting up front
     # keeps the downstream map() transform a simple float comparison and avoids repeating the
@@ -140,6 +143,7 @@ def extract_cohort_sequences(
             {
                 "index_date": convert_index_date_to_utc_timestamp(entry["index_date"]),
                 "label": entry["label"],
+                **({"age_at_index": entry["age_at_index"]} if "age_at_index" in entry_columns else {}),
             }
             for entry in index_date_label
         ]

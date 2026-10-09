@@ -140,6 +140,18 @@ def md5(to_hash: str, encoding: str = "utf-8") -> str:
     return hashlib.md5(to_hash.encode(encoding), usedforsecurity=False).hexdigest()
 
 
+def hash_parquet_contents(folder: str) -> str:
+    """SHA-256 over the names and bytes of the ``*.parquet`` files directly in ``folder`` ('' when none)."""
+    files = sorted(Path(os.path.expanduser(folder)).glob("*.parquet"))
+    if not files:
+        return ""
+    digest = hashlib.sha256()
+    for file in files:
+        digest.update(file.name.encode("utf-8"))
+        digest.update(file.read_bytes())
+    return digest.hexdigest()
+
+
 def generate_prepared_ds_path(data_args, model_args, data_folder=None) -> Path:
     """
     Generates a unique path for storing or retrieving a prepared dataset based on the specified arguments.
@@ -184,6 +196,7 @@ def generate_prepared_ds_path(data_args, model_args, data_folder=None) -> Path:
 
         If `validation_split_percentage` is `None` or zero, it is omitted from the hash for consistency.
     """
+    data_folder_override = bool(data_folder)
     data_folder = data_folder if data_folder else data_args.data_folder
     concatenated_str = (
         os.path.expanduser(data_folder)
@@ -201,6 +214,12 @@ def generate_prepared_ds_path(data_args, model_args, data_folder=None) -> Path:
     # Only added when set so hashes of existing prepared datasets stay unchanged.
     if getattr(data_args, "keep_demographic_prompt", False):
         concatenated_str += "|keep_demographic_prompt=True"
+    # A cohort folder is hashed by content, so a rewritten cohort (new index dates, labels or age_at_index)
+    # never reuses a dataset prepared from the old one. Only done when the caller passes a folder explicitly.
+    if data_folder_override:
+        cohort_digest = hash_parquet_contents(data_folder)
+        if cohort_digest:
+            concatenated_str += f"|cohort_contents={cohort_digest}"
     basename = os.path.basename(remove_trailing_slashes(data_folder))
     cleaned_basename = re.sub(r"[^a-zA-Z0-9_]", "", basename)
     LOG.info(f"concatenated_str: {concatenated_str}")

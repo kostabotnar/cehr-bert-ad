@@ -58,6 +58,28 @@ class TestKeepDemographicPrompt(unittest.TestCase):
         self.assertEqual(out["num_of_visits"], 3)
         self.assertEqual(out["age_at_index"], 76)
 
+    def test_age_from_cohort_entry_overrides_prompt_age(self):
+        record = make_record()
+        mapping = ExtractTokenizedSequenceDataMapping(
+            {1: [{"index_date": INDEX, "label": 1, "age_at_index": 72}]}, 365, keep_demographic_prompt=True
+        )
+        out = mapping.transform(record)
+        self.assertEqual(out["age_at_index"], [72])
+        self.assertEqual(out["concept_ids"][0][1], "age:76")
+
+    def test_age_is_per_index_date(self):
+        entries = [
+            {"index_date": INDEX, "label": 0, "age_at_index": 70},
+            {"index_date": INDEX - 100 * DAY, "label": 1, "age_at_index": 69},
+        ]
+        mapping = ExtractTokenizedSequenceDataMapping({1: entries}, 365, keep_demographic_prompt=True)
+        self.assertEqual(mapping.transform(make_record())["age_at_index"], [70, 69])
+
+    def test_missing_or_null_cohort_age_falls_back_to_prompt_age(self):
+        for entry in ({"index_date": INDEX, "label": 1}, {"index_date": INDEX, "label": 1, "age_at_index": None}):
+            mapping = ExtractTokenizedSequenceDataMapping({1: [entry]}, 365, keep_demographic_prompt=True)
+            self.assertEqual(mapping.transform(make_record())["age_at_index"], [76])
+
     def test_option_off_keeps_old_behavior(self):
         out = run(make_record(), keep=False)
         self.assertEqual(list(out["concept_ids"]), ["c700", "c999"])

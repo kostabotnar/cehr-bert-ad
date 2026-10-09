@@ -375,6 +375,31 @@ def test_window_excludes_index_day_and_matches_step11_semantics(tmp_path, window
     assert len(ds) == 2
 
 
+def test_extract_cohort_sequences_uses_cohort_age_at_index(tmp_path):
+    from cehrbert.runners.data_utils import extract_cohort_sequences
+
+    index = dt.date(2020, 1, 1)
+    base = tmp_path / "pretrain_prepared" / "hash"
+    _tokenized_dataset_dict({1: index, 2: index}).save_to_disk(str(base))
+    cohort = pl.DataFrame(
+        {"person_id": [1, 2], "index_date": [index] * 2, "label": [0, 1], "age_at_index": [61, 72]},
+        schema={"person_id": pl.Int64, "index_date": pl.Date, "label": pl.Int64, "age_at_index": pl.Int64},
+    )
+    folder = tmp_path / "cohort"
+    folder.mkdir()
+    shifted = lp.shift_index_dates_for_exclusive_end(cohort)
+    shifted.write_parquet(folder / "cohort.parquet")
+    config = tmp_path / "ft.yaml"
+    config.write_text(
+        yaml.safe_dump({"data_folder": "x", "dataset_prepared_path": "x", "preprocessing_num_workers": 1}),
+        encoding="utf-8",
+    )
+    cehrbert_args, data_args = lp.load_cohort_args(config, folder, base, 365)
+    processed = extract_cohort_sequences(data_args, cehrbert_args)
+    ages = {r["person_id"]: r["age_at_index"] for ds in processed.values() for r in ds}
+    assert ages == {1: 61, 2: 72}
+
+
 def test_step15_end_to_end(step, tmp_path):
     index = dt.date(2020, 1, 1)
     splits = pl.DataFrame(
