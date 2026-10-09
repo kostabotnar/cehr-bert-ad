@@ -760,6 +760,9 @@ class ExtractTokenizedSequenceDataMapping:
             )
             for prediction_time_label_map in prediction_times
         ]
+        # Age at the index date from the cohort file, one value per index date. Without it the age token of
+        # the demographic prompt (the age at the first event of the record) is used.
+        cohort_ages = [entry.get("age_at_index") for entry in prediction_times]
         observation_window_indices = np.zeros((len(prediction_times), len(record["epoch_times"])), dtype=bool)
         for i, epoch_time in enumerate(record["epoch_times"]):
             for sample_n, (
@@ -788,17 +791,20 @@ class ExtractTokenizedSequenceDataMapping:
         )
 
         batched_samples = defaultdict(list)
-        for (_, index_date, label), observation_window_index in zip(
-            prediction_start_end_times, observation_window_indices
+        for (_, index_date, label), cohort_age, observation_window_index in zip(
+            prediction_start_end_times, cohort_ages, observation_window_indices
         ):
             for k, v in static_inputs.items():
                 batched_samples[k].append(v)
             batched_samples["classifier_label"].append(label)
             batched_samples["index_date"].append(index_date)
-            try:
-                start_age = int(record["concept_ids"][1].split(":")[1])
-            except Exception:
-                start_age = -1
+            if cohort_age is not None:
+                start_age = int(cohort_age)
+            else:
+                try:
+                    start_age = int(record["concept_ids"][1].split(":")[1])
+                except Exception:
+                    start_age = -1
             batched_samples["age_at_index"].append(start_age)
             selected = observation_window_index
             leaking_epoch_positions = 0

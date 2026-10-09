@@ -7,13 +7,20 @@ The finetune runner reads a cohort folder (``cohort_folder``, every ``*.parquet`
     data/cehrbert_data/cohort/finetune/cohort.parquet   train + val rows
     data/cehrbert_data/cohort/test/cohort.parquet       test rows
 
-with the columns person_id (int64), index_date (date) and label (int64).
+with the columns person_id (int64), index_date (date), label (int64) and age_at_index (int64).
+age_at_index is ``year(index_date) - person.year_of_birth`` from the OMOP person table, the same
+definition the cohort and the baselines use. The CEHR-BERT classifier reads it instead of the age token
+of the first event of the record.
 
 Gate: every cohort person must have a non-empty sequence in ``patient_sequence`` (step 01). A
 person without one cannot be tokenized and would make step 09 fail; the step fails and lists up to 20
 person_ids. cohort step 01 builds the cohort from OMOP tables only, with an event rule that mirrors how the
 sequences are built, so a failure here points at a mismatch between the two (for example a concept
 threshold that no longer matches ``omop_common.MIN_CONCEPT_PATIENTS``).
+
+Gate: every cohort row must have a non-null age_at_index. Cohort step 01 already excludes persons
+without year_of_birth, so a null points at a mismatch between the OMOP data and the splits; the step fails
+and lists up to 20 person_ids.
 
 Run after step 01 (and cohort step 01):
     python cehrbert_model/02_prepare_cohort_folders.py
@@ -29,12 +36,29 @@ import polars as pl
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from pipeline import paths  # noqa: E402
+from pipeline import omop_common, paths  # noqa: E402
 from pipeline import pretrain_data as pd_  # noqa: E402
 from pipeline.reporting import StepReport  # noqa: E402
 
 MAX_LISTED = 20
-SCHEMA = {"person_id": pl.Int64, "index_date": pl.Date, "label": pl.Int64}
+SCHEMA = {"person_id": pl.Int64, "index_date": pl.Date, "label": pl.Int64, "age_at_index": pl.Int64}
+
+
+def add_age_at_index(splits: pl.DataFrame, data_dir: Path) -> pl.DataFrame:
+    """Add ``age_at_index`` = index year minus OMOP ``year_of_birth``; null when the person has none."""
+    person = omop_common.scan_table(data_dir, "person", ["person_id", "year_of_birth"])
+    if person is None:
+        raise FileNotFoundError(f"no OMOP person table under {data_dir}")
+    birth = (
+        person.select(pl.col("person_id").cast(pl.Int64), pl.col("year_of_birth").cast(pl.Int64).alias("_yob"))
+        .unique("person_id")
+        .collect()
+    )
+    return (
+        splits.join(birth, on="person_id", how="left")
+        .with_columns((pl.col("index_date").dt.year().cast(pl.Int64) - pl.col("_yob")).alias("age_at_index"))
+        .drop("_yob")
+    )
 
 
 def write_cohort_file(df: pl.DataFrame, folder: Path) -> Path:
@@ -51,6 +75,7 @@ def write_cohort_file(df: pl.DataFrame, folder: Path) -> Path:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Write the CEHR-BERT finetune/test cohort folders from the splits")
     parser.add_argument("--splits-file", default=str(paths.COHORT_SPLITS_FILE))
+    parser.add_argument("--data-dir", default=str(paths.OMOP_DIR), help="OMOP directory with the person table")
     parser.add_argument("--patient-sequence-dir", default=str(paths.PATIENT_SEQUENCE_DIR))
     parser.add_argument("--finetune-dir", default=str(paths.CEHRBERT_COHORT_FINETUNE_DIR))
     parser.add_argument("--test-dir", default=str(paths.CEHRBERT_COHORT_TEST_DIR))
@@ -86,6 +111,21 @@ def main(argv: list[str] | None = None) -> int:
         "every cohort person has a non-empty sequence",
         not missing,
         detail="ok" if not missing else f"{len(missing)} without one; first {min(len(missing), MAX_LISTED)}: {listed}",
+    ):
+        return _finalize(report, args.report_dir)
+
+    try:
+        splits = add_age_at_index(splits, Path(args.data_dir))
+    except FileNotFoundError as exc:
+        report.add_check("OMOP person table exists", False, detail=str(exc))
+        return _finalize(report, args.report_dir)
+    no_age = sorted(splits.filter(pl.col("age_at_index").is_null())["person_id"].unique().to_list())
+    report.add_metric("cohort_without_age", len(no_age))
+    listed_age = ", ".join(str(p) for p in no_age[:MAX_LISTED])
+    if not report.add_check(
+        "every cohort row has an age_at_index",
+        not no_age,
+        detail="ok" if not no_age else f"{len(no_age)} without one; first {min(len(no_age), MAX_LISTED)}: {listed_age}",
     ):
         return _finalize(report, args.report_dir)
 
