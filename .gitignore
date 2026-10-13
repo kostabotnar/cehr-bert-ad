@@ -47,5 +47,8 @@ Thumbs.db
 scripts/*/reports/
 scripts/reports/
 
+# --- Project-local tools (Java 8 installed by scripts/install.sh) ---
+.tools/
+
 # --- Work plans (local only) ---
 planning/

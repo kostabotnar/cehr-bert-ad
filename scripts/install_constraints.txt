@@ -1,0 +1,13 @@
+# Pins only the packages whose version changes behavior or file formats.
+# Passed to every `uv pip install` by scripts/install.sh.
+torch==2.8.0
+transformers==4.45.0
+tokenizers==0.20.3
+accelerate==1.15.0
+huggingface-hub==0.36.2
+datasets==3.6.0
+cehrbert-data==0.2.0
+numpy==1.26.4
+pandas==3.0.6
+polars==1.44.2
+pyarrow==25.0.1
