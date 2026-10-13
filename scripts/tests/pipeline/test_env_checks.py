@@ -40,15 +40,61 @@ def test_all_present_passes_and_records_python_version():
     assert "python" in report.metrics
 
 
-def test_gpu_and_java_checks_are_opt_in_and_never_fail(monkeypatch):
+def test_gpu_and_java_checks_are_opt_in_and_never_fail(monkeypatch, tmp_path):
     plain = env_checks.build_report(["json"])
     assert not any("CUDA" in c.name or "Java" in c.name for c in plain.checks)
 
     monkeypatch.setattr(env_checks.shutil, "which", lambda name: None)
+    monkeypatch.delenv("JAVA_HOME", raising=False)
+    monkeypatch.setattr(env_checks.paths, "PROJECT_ROOT", tmp_path)
     report = env_checks.build_report(["json"], check_gpu=True, check_java=True)
     java = [c for c in report.checks if c.name.startswith("Java")]
     assert len(java) == 1 and not java[0].ok and java[0].level == "warning"
     assert report.exit_code() == 0
+
+
+def _fake_java(root):
+    java = root / "bin" / "java"
+    java.parent.mkdir(parents=True)
+    java.write_text("#!/bin/sh\necho 'openjdk version \"1.8.0\"' >&2\n", encoding="utf-8")
+    java.chmod(0o755)
+    return str(java)
+
+
+def test_find_java_prefers_path(monkeypatch, tmp_path):
+    monkeypatch.setattr(env_checks.shutil, "which", lambda name: "/usr/bin/java")
+    monkeypatch.setenv("JAVA_HOME", str(tmp_path / "home"))
+    assert env_checks._find_java() == "/usr/bin/java"
+
+
+def test_find_java_uses_java_home_when_not_on_path(monkeypatch, tmp_path):
+    expected = _fake_java(tmp_path / "home")
+    monkeypatch.setattr(env_checks.shutil, "which", lambda name: None)
+    monkeypatch.setenv("JAVA_HOME", str(tmp_path / "home"))
+    monkeypatch.setattr(env_checks.paths, "PROJECT_ROOT", tmp_path / "empty")
+    assert env_checks._find_java() == expected
+
+
+def test_find_java_uses_project_local_jdk_last(monkeypatch, tmp_path):
+    expected = _fake_java(tmp_path / ".tools" / "jdk8")
+    monkeypatch.setattr(env_checks.shutil, "which", lambda name: None)
+    monkeypatch.delenv("JAVA_HOME", raising=False)
+    monkeypatch.setattr(env_checks.paths, "PROJECT_ROOT", tmp_path)
+    assert env_checks._find_java() == expected
+
+    monkeypatch.setenv("JAVA_HOME", str(tmp_path / "missing"))
+    assert env_checks._find_java() == expected
+
+    report = env_checks.build_report(["json"], check_java=True)
+    java = [c for c in report.checks if c.name.startswith("Java")][0]
+    assert java.ok and expected in java.detail
+
+
+def test_find_java_none_found(monkeypatch, tmp_path):
+    monkeypatch.setattr(env_checks.shutil, "which", lambda name: None)
+    monkeypatch.delenv("JAVA_HOME", raising=False)
+    monkeypatch.setattr(env_checks.paths, "PROJECT_ROOT", tmp_path)
+    assert env_checks._find_java() is None
 
 
 def test_run_writes_report_and_returns_exit_code(tmp_path):
