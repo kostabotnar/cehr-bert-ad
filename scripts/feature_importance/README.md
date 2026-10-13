@@ -16,7 +16,8 @@ and the fine-tuned model (cehrbert_model).
 ```bash
 bash feature_importance/run.sh
 bash feature_importance/run.sh --ctx 4096 --window-days -1
-python feature_importance/02_attention_analysis.py --max-patients 300 --top-k 20 --device cpu
+python feature_importance/02_attention_analysis.py --batch-size 64
+python feature_importance/02_attention_analysis.py --max-patients 300 --top-k 20 --device cpu --batch-size 8
 python feature_importance/03_top_feature_tables.py --top 10
 ```
 
@@ -40,7 +41,13 @@ Models and feature names are read from `build/classical_ml/<window_label>/`. Out
 Runs the fine-tuned classifier (on the GPU when CUDA is available, otherwise the CPU; override with
 `--device`) over the held-out test cohort with attention output (eager
 attention, no sample packing) and attributes each prediction to concept tokens with three methods:
-raw last-layer [CLS] attention, attention rollout and gradient-weighted attention rollout. Outputs
+raw last-layer [CLS] attention, attention rollout and gradient-weighted attention rollout.
+Patients are processed `--batch-size` at a time (default 32; `--batch-size 1` processes one at a
+time): one padded forward and one backward per batch, then each patient's attention and gradient
+are cut back to its real length, so scores match the one-at-a-time run up to floating-point
+rounding. Patients are sorted by length within chunks of 16 batches to reduce padding, and the
+rollouts run on the same device as the model. Lower `--batch-size` if the GPU runs out of memory.
+The report records `batch_size`, and progress lines show patients per minute. Outputs
 in `build/feature_importance/<run_label>/attention/`: `concept_attribution_<group>.csv`,
 `method_rank_correlation.json`; the figure is
 `build/feature_importance/<run_label>/figures/attention_top_concepts.png`.
