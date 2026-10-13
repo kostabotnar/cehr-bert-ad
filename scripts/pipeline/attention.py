@@ -17,7 +17,8 @@ example's attention stack, each a vector over sequence positions:
               because raw attention alone is a known-unreliable explanation
               (Jain & Wallace, 2019, "Attention is not Explanation").
 
-All functions operate on detached CPU tensors and return a 1-D tensor of length ``seq_len``.
+The score functions take detached tensors on any device and return a 1-D tensor of length
+``seq_len`` on that device.
 """
 
 from __future__ import annotations
@@ -36,6 +37,17 @@ def stack_example_attentions(attentions: tuple[torch.Tensor, ...], batch_index: 
     return torch.stack([a[batch_index].detach().cpu() for a in attentions], dim=0)
 
 
+def slice_example_attentions(attentions: tuple[torch.Tensor, ...], batch_index: int, length: int) -> torch.Tensor:
+    """Like ``stack_example_attentions`` for one row of a right-padded batch, kept on its device.
+
+    Keeps the leading ``length`` (real, unpadded) query and key positions and returns
+    ``(num_layers, num_heads, length, length)``, detached. Padded keys get exactly zero
+    attention under the additive mask, so the result equals, up to floating-point rounding, the
+    stack an unpadded forward of that example would give.
+    """
+    return torch.stack([a[batch_index, :, :length, :length].detach() for a in attentions], dim=0)
+
+
 def raw_cls_attention(attn_lhss: torch.Tensor, cls_index: int = CLS_INDEX) -> torch.Tensor:
     """Last-layer, head-averaged attention *from* ``[CLS]`` to every token -> ``(seq,)``."""
     last_layer = attn_lhss[-1].mean(dim=0)  # head-average -> (seq, seq)
@@ -49,7 +61,7 @@ def attention_rollout(attn_lhss: torch.Tensor, cls_index: int = CLS_INDEX) -> to
     each row to a distribution, and multiply the per-layer matrices.
     """
     num_layers, _, seq, _ = attn_lhss.shape
-    eye = torch.eye(seq, dtype=attn_lhss.dtype)
+    eye = torch.eye(seq, dtype=attn_lhss.dtype, device=attn_lhss.device)
     rolled = eye
     for layer in range(num_layers):
         a = attn_lhss[layer].mean(dim=0) + eye  # head-average + residual
@@ -69,7 +81,7 @@ def grad_attention_rollout(
     same shape as ``attn_lhss``.
     """
     num_layers, _, seq, _ = attn_lhss.shape
-    eye = torch.eye(seq, dtype=attn_lhss.dtype)
+    eye = torch.eye(seq, dtype=attn_lhss.dtype, device=attn_lhss.device)
     rolled = eye
     for layer in range(num_layers):
         cam = (grad_lhss[layer] * attn_lhss[layer]).clamp(min=0).mean(dim=0)  # (seq, seq)

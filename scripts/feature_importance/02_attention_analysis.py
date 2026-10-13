@@ -25,7 +25,9 @@ left off so each row is one patient with [CLS] at position 0.
 
 Patients are processed ``--batch-size`` at a time (default 32): one padded forward and one
 backward per batch, then each example's attention and gradient tensors are sliced to its real
-length before attribution, so scores match a one-at-a-time run.
+length before attribution, so scores match a one-at-a-time run. To limit padding, patients are
+sorted by length within chunks of 16 batches; the cohort sums do not depend on that order
+beyond floating-point rounding.
 
 Usage
   python feature_importance/02_attention_analysis.py
@@ -102,6 +104,9 @@ def _example_for_collator(record: dict) -> dict:
     return {k: record[k] for k in DATASET_FEATURE_KEYS if k in record}
 
 
+# Patients are read SORT_CHUNK_BATCHES batches at a time and sorted by length inside the chunk.
+SORT_CHUNK_BATCHES = 16
+
 MODEL_INPUT_KEYS = (
     "input_ids",
     "attention_mask",
@@ -138,6 +143,13 @@ def _attribute_batch(model, batch, device) -> list[tuple[dict[str, torch.Tensor]
     gives each example's attention exactly the gradient of its own logit.
     """
     inputs = {k: v.to(device) for k, v in batch.items() if k in MODEL_INPUT_KEYS}
+    # PositionalEncodingLayer subtracts each row's minimum positive visit_concept_order. The
+    # collator pads that field with max_length - 1, which becomes the minimum (shifting every
+    # real position) when a row's real orders all exceed it, as in long tail-truncated
+    # histories. Orders <= 0 are excluded from the minimum, so pad with 0 instead.
+    inputs["visit_concept_orders"] = torch.where(
+        inputs["attention_mask"] > 0, inputs["visit_concept_orders"], torch.zeros_like(inputs["visit_concept_orders"])
+    )
     # CehrBertForClassification._apply_age_norm puts age_batch_norm back in train mode after any
     # batch-size-1 forward; a later multi-example batch would then normalize age with batch
     # statistics (mixing examples). Re-enter eval mode before every forward.
@@ -155,29 +167,32 @@ def _attribute_batch(model, batch, device) -> list[tuple[dict[str, torch.Tensor]
     probs = torch.sigmoid(logits).detach().cpu().tolist()
     logits.sum().backward()
 
-    attentions = tuple(a.detach().cpu() for a in out.attentions)
+    attentions = out.attentions
     # A layer's attention probs may not receive a gradient (a.grad is None) if that layer
     # does not contribute to the logit; substitute zeros so the stack stays well-formed and
     # that layer simply gets zero relevance in grad-weighted rollout.
-    grads = tuple(
-        (a.grad.detach().cpu() if a.grad is not None else torch.zeros_like(a, device="cpu")) for a in out.attentions
-    )
+    grads = tuple((a.grad if a.grad is not None else torch.zeros_like(a)) for a in attentions)
     # The collator pads on the right and prepends [CLS] at column 0, so each row's real tokens
     # are its leading attention_mask.sum() columns. Slicing to that length gives the same
     # (seq, seq) matrices an unbatched forward produces.
     lengths = batch["attention_mask"].sum(dim=1).to(torch.long).tolist()
 
-    results = []
+    # Rollouts run on the model's device: copying the padded (batch, heads, seq, seq) stacks to
+    # the CPU and rolling out there costs far more than the forward and backward. Only the
+    # per-token score vectors are moved, in one transfer per batch.
+    flat = []
     for i, length in enumerate(lengths):
-        attn_lhss = attn.stack_example_attentions(tuple(a[:, :, :length, :length] for a in attentions), batch_index=i)
-        grad_lhss = attn.stack_example_attentions(tuple(g[:, :, :length, :length] for g in grads), batch_index=i)
+        attn_lhss = attn.slice_example_attentions(attentions, i, length)
+        grad_lhss = attn.slice_example_attentions(grads, i, length)
         scores = {
             "raw": attn.raw_cls_attention(attn_lhss),
             "rollout": attn.attention_rollout(attn_lhss),
             "gradxatt": attn.grad_attention_rollout(attn_lhss, grad_lhss),
         }
-        results.append((scores, probs[i], length))
-    return results
+        flat += [scores[m] for m in attn.METHODS]
+    k = len(attn.METHODS)
+    split = torch.cat(flat).cpu().split([n for n in lengths for _ in range(k)])
+    return [(dict(zip(attn.METHODS, split[k * i : k * (i + 1)])), probs[i], length) for i, length in enumerate(lengths)]
 
 
 class _TokenLookup:
@@ -236,37 +251,48 @@ def _run_attribution(model, collator, dataset, n_run, batch_size, device, tokeni
     acc = {g: {m: defaultdict(float) for m in attn.METHODS} for g in ("pred_pos", "pred_neg")}
     present = {g: defaultdict(int) for g in ("pred_pos", "pred_neg")}
     group_counts = defaultdict(int)
-    n_attributed = n_skipped = n_done = 0
+    n_attributed = n_skipped = n_reported = 0
     lookup = _TokenLookup(tokenizer)
-    pending: list[dict] = []
     t_start = time.perf_counter()
+    chunk_size = batch_size * SORT_CHUNK_BATCHES
 
-    for idx in range(n_run):
-        record = _truncate_with_concepts(collator, dataset[idx])
-        if record is None:
-            n_skipped += 1
-        else:
-            pending.append(record)
-        if len(pending) < batch_size and idx + 1 < n_run:
-            continue
-        if pending:
-            batch = collator(pending)
+    for start in range(0, n_run, chunk_size):
+        chunk = []
+        for idx in range(start, min(start + chunk_size, n_run)):
+            record = _truncate_with_concepts(collator, dataset[idx])
+            if record is None:
+                n_skipped += 1
+            else:
+                chunk.append(record)
+        if batch_size > 1:
+            # Grouping similar lengths keeps padding, and so forward/backward cost, small. Batch
+            # size 1 keeps dataset order so its float accumulation order matches the original.
+            chunk.sort(key=lambda r: len(r["input_ids"]))
+        for b in range(0, len(chunk), batch_size):
+            batch = collator(chunk[b : b + batch_size])
             input_ids = batch["input_ids"].tolist()
             for row, (scores, prob, length) in zip(input_ids, _attribute_batch(model, batch, device)):
                 if _accumulate(scores, prob, row[:length], lookup, acc, present, group_counts):
                     n_attributed += 1
                 else:
                     n_skipped += 1
-            pending.clear()
-        n_prev, n_done = n_done, idx + 1
-        if n_done // 100 > n_prev // 100 or n_done == n_run:
-            rate = 60.0 * n_done / max(time.perf_counter() - t_start, 1e-9)
-            print(
-                f"  processed {n_done}/{n_run} (attributed={n_attributed}, skipped={n_skipped}, "
-                f"{rate:.0f} patients/min)",
-                flush=True,
-            )
+            n_reported = _report_progress(n_attributed, n_skipped, n_reported, n_run, t_start)
+        n_reported = _report_progress(n_attributed, n_skipped, n_reported, n_run, t_start)
     return acc, present, group_counts, n_attributed, n_skipped
+
+
+def _report_progress(n_attributed, n_skipped, n_reported, n_run, t_start) -> int:
+    """Print progress when the processed count crosses a multiple of 100 or reaches the end."""
+    n_done = n_attributed + n_skipped
+    if n_done // 100 > n_reported // 100 or (n_done == n_run and n_reported < n_run):
+        rate = 60.0 * n_done / max(time.perf_counter() - t_start, 1e-9)
+        print(
+            f"  processed {n_done}/{n_run} (attributed={n_attributed}, skipped={n_skipped}, "
+            f"{rate:.0f} patients/min)",
+            flush=True,
+        )
+        return n_done
+    return n_reported
 
 
 def _concept_name(tokenizer, concept_id: str) -> str:

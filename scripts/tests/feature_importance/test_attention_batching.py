@@ -67,14 +67,14 @@ def collator(mod):
     return mod._build_collator(FakeTokenizer(), MAX_LENGTH)
 
 
-def _record(person_id, tokens, seed):
+def _record(person_id, tokens, seed, first_order=1):
     rng = random.Random(seed)
     n = len(tokens)
     return {
         "input_ids": [VOCAB.index(t) for t in tokens],
         "ages": [60 + i // 4 for i in range(n)],
         "dates": [2000 + 3 * i for i in range(n)],
-        "visit_concept_orders": [1 + i // 4 for i in range(n)],
+        "visit_concept_orders": [first_order + i // 4 for i in range(n)],
         "concept_values": [rng.random() for _ in range(n)],
         "concept_value_masks": [rng.randint(0, 1) for _ in range(n)],
         "visit_segments": [1 + (i // 4) % 2 for i in range(n)],
@@ -95,7 +95,11 @@ def _concepts(n, seed):
 @pytest.fixture
 def records():
     lengths = [7, 2, 19, 31, 45, 12, 4]  # 45 exceeds MAX_LENGTH - 1 and is tail-truncated
-    return [_record(i, _concepts(n, seed=i), seed=i) for i, n in enumerate(lengths)]
+    out = [_record(i, _concepts(n, seed=i), seed=i) for i, n in enumerate(lengths)]
+    # A long history keeps its late visit orders after truncation; all of them exceed the
+    # collator's padding value (MAX_LENGTH - 1), which the positional layer's row minimum sees.
+    out.append(_record(7, _concepts(10, seed=7), seed=7, first_order=3 * MAX_LENGTH))
+    return out
 
 
 def test_padded_batch_scores_match_one_at_a_time(mod, model, collator, records):
@@ -142,9 +146,61 @@ def test_run_attribution_is_batch_size_invariant_and_skips_empty_patients(mod, m
                     assert value == pytest.approx(ref[0][group][method][cid], abs=TOL)
 
 
-def test_run_attribution_caps_at_n_run(mod, model, collator, records):
+def test_run_attribution_caps_at_n_run_and_reports_the_end(mod, model, collator, records, capsys):
     _, _, counts, n_attr, n_skip = mod._run_attribution(model, collator, records, 3, 2, "cpu", FakeTokenizer())
     assert n_attr + n_skip == 3 and sum(counts.values()) == n_attr
+    assert capsys.readouterr().out.count("processed 3/3") == 1
+
+
+def test_progress_prints_at_each_hundred_and_at_the_end(mod, capsys):
+    reported = 0
+    for done in (32, 64, 96, 128, 160, 192, 224, 250):
+        reported = mod._report_progress(done, 0, reported, 250, 0.0)
+    lines = capsys.readouterr().out.splitlines()
+    assert [line.split()[1] for line in lines] == ["128/250", "224/250", "250/250"]
+
+
+def _masked_softmax_batch(logits, lengths):
+    """(layers, batch, heads, S, S) attention with keys past each row's length masked like BERT."""
+    s = logits.shape[-1]
+    key_ok = torch.arange(s)[None, :] < torch.tensor(lengths)[:, None]  # (batch, S)
+    bias = torch.where(key_ok, 0.0, torch.finfo(logits.dtype).min)[None, :, None, None, :]
+    return torch.softmax(logits + bias, dim=-1)
+
+
+def test_slice_example_attentions_matches_unpadded_scores():
+    from pipeline import attention as attn
+
+    torch.manual_seed(1)
+    lengths = [5, 11, 2, 8]
+    width = max(lengths)
+    logits = torch.randn(3, len(lengths), 4, width, width)
+    grads_padded = torch.randn(3, len(lengths), 4, width, width)
+    padded = _masked_softmax_batch(logits, lengths)
+    for i, n in enumerate(lengths):
+        alone = torch.softmax(logits[:, i, :, :n, :n], dim=-1)  # the same example, never padded
+        a = attn.slice_example_attentions(tuple(padded), i, n)
+        g = attn.slice_example_attentions(tuple(grads_padded), i, n)
+        assert a.shape == (3, 4, n, n)
+        g_alone = grads_padded[:, i, :, :n, :n]
+        torch.testing.assert_close(attn.raw_cls_attention(a), attn.raw_cls_attention(alone), atol=TOL, rtol=0)
+        torch.testing.assert_close(attn.attention_rollout(a), attn.attention_rollout(alone), atol=TOL, rtol=0)
+        torch.testing.assert_close(
+            attn.grad_attention_rollout(a, g), attn.grad_attention_rollout(alone, g_alone), atol=TOL, rtol=0
+        )
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="needs a CUDA device")
+def test_rollouts_run_on_the_input_device():
+    from pipeline import attention as attn
+
+    torch.manual_seed(2)
+    a = torch.softmax(torch.randn(3, 4, 9, 9), dim=-1)
+    g = torch.randn(3, 4, 9, 9)
+    for fn, args in ((attn.attention_rollout, (a,)), (attn.grad_attention_rollout, (a, g))):
+        on_gpu = fn(*(x.cuda() for x in args))
+        assert on_gpu.device.type == "cuda"
+        torch.testing.assert_close(on_gpu.cpu(), fn(*args), atol=TOL, rtol=0)
 
 
 def test_token_lookup_caches_tokenizer_calls(mod):
