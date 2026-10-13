@@ -15,7 +15,9 @@ real concept tokens (specials/visit markers excluded), then aggregated per conce
 by the model's predicted class (prob >= 0.5). Outputs, per run label, under
 ``build/feature_importance/<label>/attention/``:
 
-  concept_attribution_<group>.csv   ranked concepts per method (group = pred_pos / pred_neg)
+  concept_attribution_<group>.csv   ranked concepts per method (group = pred_pos / pred_neg); concept_name is
+                                    the OMOP concept name, or a decoded label for structural tokens
+                                    (time gaps, year, age, gender, race, visit type, discharge)
   method_rank_correlation.json      Spearman rho between the three methods' rankings
   ../figures/attention_top_concepts.png  top concepts driving positive predictions (3 methods)
 
@@ -41,6 +43,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import textwrap
 import time
 from collections import defaultdict
 from pathlib import Path
@@ -52,6 +55,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from pipeline import attention as attn  # noqa: E402
 from pipeline import paths  # noqa: E402
+from pipeline.concept_labels import ConceptLabels, numeric_ids  # noqa: E402
 from pipeline.config_validation import load_yaml  # noqa: E402
 from pipeline.reporting import StepReport  # noqa: E402
 
@@ -295,12 +299,7 @@ def _report_progress(n_attributed, n_skipped, n_reported, n_run, t_start) -> int
     return n_reported
 
 
-def _concept_name(tokenizer, concept_id: str) -> str:
-    mapping = getattr(tokenizer, "_concept_name_mapping", {}) or {}
-    return mapping.get(concept_id, concept_id)
-
-
-def _write_group_csv(out_dir, group, acc_group, present_group, n_group, tokenizer, top_k):
+def _write_group_csv(out_dir, group, acc_group, present_group, n_group, labels, top_k):
     """Write a ranked per-method concept table for one predicted-class group; return top lists."""
     import pandas as pd
 
@@ -309,7 +308,7 @@ def _write_group_csv(out_dir, group, acc_group, present_group, n_group, tokenize
     for cid in concept_ids:
         row = {
             "concept_id": cid,
-            "concept_name": _concept_name(tokenizer, cid),
+            "concept_name": labels.token_label(cid),
             "n_patients_present": present_group.get(cid, 0),
             "pct_patients_present": round(100.0 * present_group.get(cid, 0) / max(n_group, 1), 2),
         }
@@ -350,7 +349,7 @@ def _plot_top_concepts(tops, n_pos, fig_path, top_k):
     colors = {"raw": "#4C72B0", "rollout": "#55A868", "gradxatt": "#C44E52"}
     for ax, method in zip(axes, attn.METHODS):
         d = tops[method].iloc[::-1]  # largest at top
-        labels = [f"{n[:38]} ({c})" for n, c in zip(d["concept_name"], d["concept_id"])]
+        labels = [textwrap.shorten(str(n), width=48, placeholder="...") for n in d["concept_name"]]
         ax.barh(range(len(d)), d[f"{method}_mean"], color=colors[method])
         ax.set_yticks(range(len(d)))
         ax.set_yticklabels(labels, fontsize=8)
@@ -384,6 +383,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--device", default=None, help="torch device (default: cuda when available, otherwise cpu)")
     parser.add_argument("--output-dir", default=None)
     parser.add_argument("--report-dir", default=None)
+    parser.add_argument(
+        "--concept-table",
+        default=None,
+        help="Path to an OMOP CONCEPT parquet (concept_id, concept_name). "
+        "Default: data/omop_data/concept/concept.parquet.",
+    )
     args = parser.parse_args(argv)
     if args.batch_size < 1:
         parser.error("--batch-size must be at least 1")
@@ -467,6 +472,9 @@ def main(argv: list[str] | None = None) -> int:
         return _finalize(report, report_dir)
 
     # --- write tables + correlations + figure -----------------------------
+    seen_tokens = {c for g in acc.values() for m in g.values() for c in m}
+    labels = ConceptLabels.load(args.concept_table, numeric_ids(seen_tokens))
+    report.add_metric("concept_ids_labelled", len(labels))
     pos_tops = None
     for group in ("pred_pos", "pred_neg"):
         n_group = group_counts[group]
@@ -474,7 +482,7 @@ def main(argv: list[str] | None = None) -> int:
             report.warn(f"{group} group non-empty", ok=False, detail="no patients in this group")
             continue
         csv_path, df, tops = _write_group_csv(
-            output_dir, group, acc[group], present[group], n_group, tokenizer, args.top_k
+            output_dir, group, acc[group], present[group], n_group, labels, args.top_k
         )
         report.add_artifact(csv_path)
         if group == "pred_pos":
