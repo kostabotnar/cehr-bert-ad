@@ -9,52 +9,67 @@ CEHR-BERT and with classical baselines (logistic regression, XGBoost). The pipel
 
 - Linux with an NVIDIA GPU and driver for pretraining and fine-tuning. The tests and the classical
   baselines run without a GPU.
-- Python 3.10 or newer (the project is run with 3.12).
-- Java 8 on `PATH`. Sequence generation (`cehrbert_model` step 01) runs on PySpark 3.1.2, which needs it.
+- [uv](https://docs.astral.sh/uv/getting-started/installation/). It creates the Python environment (3.12
+  by default), so no system Python, pip or conda is needed.
+- Java 8 for sequence generation (`cehrbert_model` step 01), which runs on PySpark 3.1.2. The install
+  script can install it into the project.
 - Your OMOP export as one folder per table with parquet files. Patient data is not in this repository.
 
 ## Installation
 
-Clone the repository:
+Install [uv](https://docs.astral.sh/uv/getting-started/installation/), then clone the repository and run
+the install script:
 
 ```bash
 git clone https://github.com/kostabotnar/cehr-bert-ad.git
 cd cehr-bert-ad
+bash scripts/install.sh
 ```
 
-Create a virtual environment in `.venv` at the project root and activate it:
+The script creates `.venv` at the project root, installs PyTorch, the vendored CEHR-BERT package and
+the plotting extras with the versions pinned in `scripts/install_constraints.txt`, and runs the
+environment check of every pipeline part. It is safe to rerun: finished steps print
+`skipped (already present)`. Its log is `build/install/install.log`.
+
+Options:
+
+- `--python 3.12`: Python version for `.venv`.
+- `--cuda cu129|cu128|cu126|cpu`: PyTorch build. By default it is detected from `nvidia-smi`, and falls
+  back to `cpu` without a GPU. On aarch64 only `cu129` and `cpu` exist.
+- `--java ask|install|skip`: what to do when Java 8 is missing (default `ask`).
+- `--dry-run`: print the commands that would change something instead of running them.
+
+If Java 8 (or 11) is not found, the script asks whether to install Eclipse Temurin JDK 8 into
+`.tools/jdk8` (checksum verified, added to `.venv/bin/activate`) or to skip, in which case you install
+it yourself. Without a terminal, `ask` means skip.
+
+Activate the environment before running the pipeline:
 
 ```bash
-python3 -m venv .venv
 source .venv/bin/activate
-pip install --upgrade pip
 ```
 
-Install PyTorch for your CUDA version first, so the CPU-only wheel is not pulled in as a dependency.
-The project runs with `torch==2.8.0` built for CUDA 12.9; pick the index URL that matches your driver
-from [pytorch.org](https://pytorch.org/get-started/locally/):
+### Manual installation
+
+The same steps by hand, from the project root:
 
 ```bash
-pip install "torch==2.8.0" --index-url https://download.pytorch.org/whl/cu129
+uv venv --python 3.12 .venv
+uv pip install --python .venv/bin/python --constraint scripts/install_constraints.txt torch \
+    --index-url https://download.pytorch.org/whl/cu129
 ```
 
-Install the vendored CEHR-BERT package with its development extras (pytest and friends). It takes its
-version from git tags through `setuptools_scm`, and `cehrbert/` is not a git repository of its own, so
-the version has to be set explicitly:
+Pick the PyTorch index that matches your driver (`cu129`, `cu128`, `cu126` or `cpu`; aarch64 has CUDA
+wheels for `cu129` only). The vendored package takes its version from git tags through `setuptools_scm`,
+and `cehrbert/` is not a git repository of its own, so the version has to be set explicitly:
 
 ```bash
-SETUPTOOLS_SCM_PRETEND_VERSION=0.0.0+local pip install -e "cehrbert[dev]"
+SETUPTOOLS_SCM_PRETEND_VERSION=0.0.0+local uv pip install --python .venv/bin/python \
+    --constraint scripts/install_constraints.txt -e "cehrbert[dev]"
+uv pip install --python .venv/bin/python --constraint scripts/install_constraints.txt matplotlib statsmodels
 ```
 
-This also installs `cehrbert_data`, PySpark, XGBoost, scikit-learn, polars and the other pipeline
-dependencies. Install the packages the evaluation and feature importance plots use:
-
-```bash
-pip install matplotlib statsmodels
-```
-
-With [uv](https://docs.astral.sh/uv/), replace `python3 -m venv .venv` with `uv venv .venv` and
-`pip install` with `uv pip install`.
+Java 8 must be on `PATH`, or at `.tools/jdk8/bin/java`.
 
 ## Verify the installation
 
