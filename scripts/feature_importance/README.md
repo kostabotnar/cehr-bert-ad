@@ -29,9 +29,10 @@ go to all three steps; `--from <step id>`.
 Loads the fitted estimators (`model.joblib`, classical_ml step 02) and the column-aligned
 `feature_names.json` (classical_ml step 01). LR is ranked by signed coefficient (features are
 log1p-scaled and MaxAbs-scaled, so magnitudes are roughly comparable), XGBoost by
-`feature_importances_`. OMOP codes are mapped to labels through the CONCEPT table in
-`data/omop_data/concept/`; in a de-identified dataset the name is the source vocabulary code, so
-pass an Athena CONCEPT table with `--concept-table` for real descriptions.
+`feature_importances_`. The `label` column comes from the OMOP CONCEPT table in
+`data/omop_data/concept/` (`--concept-table` selects another one): `cond: Amnesia`, `race: White`,
+`gender: MALE`; id 0 reads `race: unknown` or `gender: unknown`; `age` and `history_length_days`
+get plain-language labels. The lookup is shared by steps 01 to 03 in `pipeline/concept_labels.py`.
 
 Models and feature names are read from `build/classical_ml/<window_label>/`. Outputs in
 `build/feature_importance/<run_label>/`: `lr/feature_importance.csv`, `xgboost/feature_importance.csv`.
@@ -49,13 +50,20 @@ rounding. Patients are sorted by length within chunks of 16 batches to reduce pa
 rollouts run on the same device as the model. Lower `--batch-size` if the GPU runs out of memory.
 The report records `batch_size`, and progress lines show patients per minute. Outputs
 in `build/feature_importance/<run_label>/attention/`: `concept_attribution_<group>.csv`,
-`method_rank_correlation.json`; the figure is
+`method_rank_correlation.json`. `concept_id` keeps the raw token; `concept_name` is the OMOP concept name
+for numeric ids and a decoded label for structural tokens: `D<n>` and `i-D<n>` (days between visits, or
+between events inside an inpatient visit), `LT` and `i-LT` (long-term gap, 1080 days or more), `year:<YYYY>`
+and `age:<n>` (year and age at the first visit), `Gender/<x>`, `Race/<x>`, `Visit/<x>`, `Discharge/<x>` (`0`
+means unknown). `--concept-table` selects another CONCEPT table. The figure, labelled by concept name only, is
 `build/feature_importance/<run_label>/figures/attention_top_concepts.png`.
 The fine-tuned model comes from `data/finetune_results/` and the test data from `data/predict_prepared/`.
 
 ## Step 03
 
-Combines the rankings above with source codes and descriptions (curated in the script, from RxNorm
-and standard code references). It reads the rankings from `build/feature_importance/<run_label>/`. Outputs in
+Combines the rankings above with source codes and descriptions. `source_code` is
+`<vocabulary_id>:<concept_code>` from the CONCEPT table (e.g. `SNOMED:48167000`); structural tokens and
+derived features keep their raw name. `description` is the CONCEPT name or decoded token label, unless a
+curated entry in the script applies (RxNorm drug names, a few code references, age, history length, gender).
+`--concept-table` selects another CONCEPT table. It reads the rankings from `build/feature_importance/<run_label>/`. Outputs in
 `build/feature_importance/<run_label>/feature_tables/`: `lr_top10.csv`,
 `xgboost_top10.csv`, `attention_top10.csv`, `top_features.md`.
