@@ -16,7 +16,7 @@ and the fine-tuned model (cehrbert_model).
 ```bash
 bash feature_importance/run.sh
 bash feature_importance/run.sh --ctx 4096 --window-days -1
-python feature_importance/02_attention_analysis.py --max-patients 300 --top-k 20 --device cuda
+python feature_importance/02_attention_analysis.py --max-patients 300 --top-k 20 --device cpu
 python feature_importance/03_top_feature_tables.py --top 10
 ```
 
@@ -37,7 +37,8 @@ Models and feature names are read from `build/classical_ml/<window_label>/`. Out
 
 ## Step 02
 
-Runs the fine-tuned classifier over the held-out test cohort with attention output (eager
+Runs the fine-tuned classifier (on the GPU when CUDA is available, otherwise the CPU; override with
+`--device`) over the held-out test cohort with attention output (eager
 attention, no sample packing) and attributes each prediction to concept tokens with three methods:
 raw last-layer [CLS] attention, attention rollout and gradient-weighted attention rollout. Outputs
 in `build/feature_importance/<run_label>/attention/`: `concept_attribution_<group>.csv`,

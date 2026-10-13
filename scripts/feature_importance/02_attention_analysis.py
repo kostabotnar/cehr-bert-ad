@@ -26,7 +26,7 @@ left off so each row is one patient with [CLS] at position 0.
 Usage
   python feature_importance/02_attention_analysis.py
   python feature_importance/02_attention_analysis.py --max-patients 300 --top-k 20
-  python feature_importance/02_attention_analysis.py --device cuda --window-days 365 --ctx 512
+  python feature_importance/02_attention_analysis.py --device cpu --window-days 365 --ctx 512
 """
 
 from __future__ import annotations
@@ -260,10 +260,14 @@ def main(argv: list[str] | None = None) -> int:
         "--max-patients", type=int, default=None, help="Cap the number of test patients processed (default: all)"
     )
     parser.add_argument("--top-k", type=int, default=20, help="Concepts shown per method in the figure")
-    parser.add_argument("--device", default="cpu", help="torch device (cpu / cuda)")
+    parser.add_argument(
+        "--device", default=None, help="torch device (default: cuda when available, otherwise cpu)"
+    )
     parser.add_argument("--output-dir", default=None)
     parser.add_argument("--report-dir", default=None)
     args = parser.parse_args(argv)
+    if args.device is None:
+        args.device = "cuda" if torch.cuda.is_available() else "cpu"
 
     label = paths.run_label(args.window_days, args.ctx)
     output_dir = Path(args.output_dir) if args.output_dir else paths.feature_importance_dir(label) / "attention"
@@ -347,7 +351,7 @@ def main(argv: list[str] | None = None) -> int:
         else:
             n_skipped += 1
         if (idx + 1) % 100 == 0:
-            print(f"  processed {idx + 1}/{n_run} (attributed={n_attributed}, skipped={n_skipped})")
+            print(f"  processed {idx + 1}/{n_run} (attributed={n_attributed}, skipped={n_skipped})", flush=True)
 
     report.add_metric("patients_attributed", n_attributed)
     report.add_metric("patients_skipped_no_concepts", n_skipped)
