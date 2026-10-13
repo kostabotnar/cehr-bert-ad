@@ -26,6 +26,18 @@ if [ -z "${MIN_CONCEPT_PATIENTS:-}" ]; then
     exit 1
 fi
 
+# Spark needs Java. The installer puts a JDK in .tools/jdk8 and only activates it in the venv, which
+# this script does not source, so fall back to it when no usable Java is already configured.
+LOCAL_JDK="${PROJECT_ROOT}/.tools/jdk8"
+if ! command -v java >/dev/null 2>&1; then
+    if [[ -z "${JAVA_HOME:-}" || ! -x "${JAVA_HOME}/bin/java" ]] && [[ -x "${LOCAL_JDK}/bin/java" ]]; then
+        export JAVA_HOME="${LOCAL_JDK}"
+    fi
+    if [[ -n "${JAVA_HOME:-}" && -x "${JAVA_HOME}/bin/java" ]]; then
+        export PATH="${JAVA_HOME}/bin:${PATH}"
+    fi
+fi
+
 # Spark memory/parallelism (override via environment).
 export SPARK_WORKER_INSTANCES="${SPARK_WORKER_INSTANCES:-1}"
 export SPARK_WORKER_CORES="${SPARK_WORKER_CORES:-8}"
@@ -47,6 +59,7 @@ SPARK_SHUFFLE_PARTITIONS="${SPARK_SHUFFLE_PARTITIONS:-1000}"
 export PYSPARK_SUBMIT_ARGS="${PYSPARK_SUBMIT_ARGS:---master ${SPARK_MASTER} --driver-memory ${SPARK_DRIVER_MEMORY} --conf spark.sql.shuffle.partitions=${SPARK_SHUFFLE_PARTITIONS} --conf ${REBASE} --conf ${REBASE_DT} pyspark-shell}"
 
 echo "Project root : ${PROJECT_ROOT}"
+echo "Java home    : ${JAVA_HOME:-$(command -v java || echo 'not found')}"
 echo "Input folder : ${INPUT_FOLDER}"
 echo "Output folder: ${OUTPUT_FOLDER}"
 echo "Start date   : ${START_DATE}"

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import importlib
 import importlib.util
+import os
 import shutil
 import subprocess
 import sys
@@ -30,6 +31,22 @@ def _installed(mod_name: str) -> bool:
         return importlib.util.find_spec(mod_name) is not None
     except (ImportError, ValueError):
         return False
+
+
+def _find_java() -> str | None:
+    """Locate java: PATH, then $JAVA_HOME/bin/java, then the project-local .tools/jdk8 install."""
+    on_path = shutil.which("java")
+    if on_path:
+        return on_path
+    candidates = []
+    java_home = os.environ.get("JAVA_HOME")
+    if java_home:
+        candidates.append(os.path.join(java_home, "bin", "java"))
+    candidates.append(str(paths.PROJECT_ROOT / ".tools" / "jdk8" / "bin" / "java"))
+    for cand in candidates:
+        if os.path.isfile(cand) and os.access(cand, os.X_OK):
+            return cand
+    return None
 
 
 def build_report(
@@ -68,19 +85,24 @@ def build_report(
             report.note("torch not importable; skipped GPU check")
 
     if check_java:
-        java = shutil.which("java")
+        java = _find_java()
         if java:
             try:
                 out = subprocess.run([java, "-version"], capture_output=True, text=True, timeout=20)
                 ver = (out.stderr or out.stdout).splitlines()[0] if (out.stderr or out.stdout) else "unknown"
             except Exception:
                 ver = "present"
+            if java != shutil.which("java"):
+                ver = f"{ver} ({java})"
             report.warn("Java available (Spark / sequence generation)", ok=True, detail=ver)
         else:
             report.warn(
                 "Java available (Spark / sequence generation)",
                 ok=False,
-                detail="java not on PATH; cehrbert_model step 01 will fail",
+                detail=(
+                    "java not found on PATH, in $JAVA_HOME/bin, or in <project>/.tools/jdk8/bin; "
+                    "cehrbert_model step 01 will fail"
+                ),
             )
 
     return report
