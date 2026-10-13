@@ -23,8 +23,13 @@ Two codebase-specific requirements are enforced here: the model is loaded with
 ``attn_implementation="eager"`` (flash attention returns no weights), and sample packing is
 left off so each row is one patient with [CLS] at position 0.
 
+Patients are processed ``--batch-size`` at a time (default 32): one padded forward and one
+backward per batch, then each example's attention and gradient tensors are sliced to its real
+length before attribution, so scores match a one-at-a-time run.
+
 Usage
   python feature_importance/02_attention_analysis.py
+  python feature_importance/02_attention_analysis.py --batch-size 64
   python feature_importance/02_attention_analysis.py --max-patients 300 --top-k 20
   python feature_importance/02_attention_analysis.py --device cpu --window-days 365 --ctx 512
 """
@@ -34,6 +39,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import time
 from collections import defaultdict
 from pathlib import Path
 
@@ -96,85 +102,171 @@ def _example_for_collator(record: dict) -> dict:
     return {k: record[k] for k in DATASET_FEATURE_KEYS if k in record}
 
 
-def _attribute_one(model, batch, device) -> tuple[dict[str, torch.Tensor], float] | None:
-    """Forward+backward one single-patient batch; return per-method token scores and prob.
+MODEL_INPUT_KEYS = (
+    "input_ids",
+    "attention_mask",
+    "ages",
+    "dates",
+    "visit_concept_orders",
+    "concept_values",
+    "concept_value_masks",
+    "visit_segments",
+    "age_at_index",
+)
 
-    Returns ``None`` for sequences with no real concept tokens after [CLS] -- such an example
-    collates to a width-1 ``[CLS]``-only row that carries no clinical signal to attribute (and
-    whose ragged time-series features can break the embedding concat), so it is skipped before
-    the forward.
+
+def _truncate_with_concepts(collator, record: dict) -> dict | None:
+    """Apply the collator's truncation; return ``None`` when no concept tokens remain.
+
+    Such an example would collate to a width-1 ``[CLS]``-only row that carries no clinical
+    signal to attribute, and its ragged time-series features can break the embedding concat
+    when collated alongside others, so it is filtered out before batching. The collator
+    re-applies truncation to the returned record as a no-op.
     """
-    if batch["input_ids"].shape[1] <= 1:
+    truncated = collator.generate_start_end_index(_example_for_collator(record))
+    if len(truncated["input_ids"]) == 0:
         return None
-    inputs = {
-        k: v.to(device)
-        for k, v in batch.items()
-        if k
-        in (
-            "input_ids",
-            "attention_mask",
-            "ages",
-            "dates",
-            "visit_concept_orders",
-            "concept_values",
-            "concept_value_masks",
-            "visit_segments",
-            "age_at_index",
-        )
-    }
+    return truncated
+
+
+def _attribute_batch(model, batch, device) -> list[tuple[dict[str, torch.Tensor], float, int]]:
+    """Forward+backward one padded batch; return ``(scores, prob, real_length)`` per example.
+
+    Batching relies on examples not interacting in this model in eval mode: eager attention is
+    masked per row, LayerNorm is per token, dropout is off, the pooler reads position 0 of each
+    row, and the age BatchNorm uses running statistics. So the backward of the summed logits
+    gives each example's attention exactly the gradient of its own logit.
+    """
+    inputs = {k: v.to(device) for k, v in batch.items() if k in MODEL_INPUT_KEYS}
+    # CehrBertForClassification._apply_age_norm puts age_batch_norm back in train mode after any
+    # batch-size-1 forward; a later multi-example batch would then normalize age with batch
+    # statistics (mixing examples). Re-enter eval mode before every forward.
+    model.eval()
     model.zero_grad(set_to_none=True)
     out = model(**inputs, output_attentions=True)
     if out.attentions is None:
         # Should not happen with attn_implementation="eager", but sdpa/flash return no
-        # weights -- fail loud rather than crash with an opaque NoneType error downstream.
+        # weights; fail loud rather than crash with an opaque NoneType error downstream.
         raise RuntimeError("model returned no attention weights; load with attn_implementation='eager'")
     # Retain grad on the attention probs so backward populates .grad on each layer.
     for a in out.attentions:
         a.retain_grad()
-    logit = out.logits[0, 0]
-    prob = float(torch.sigmoid(logit).detach().cpu())
-    logit.backward()
+    logits = out.logits[:, 0]
+    probs = torch.sigmoid(logits).detach().cpu().tolist()
+    logits.sum().backward()
 
-    attn_lhss = attn.stack_example_attentions(out.attentions, batch_index=0)
+    attentions = tuple(a.detach().cpu() for a in out.attentions)
     # A layer's attention probs may not receive a gradient (a.grad is None) if that layer
     # does not contribute to the logit; substitute zeros so the stack stays well-formed and
     # that layer simply gets zero relevance in grad-weighted rollout.
-    grad_lhss = torch.stack(
-        [(a.grad[0].detach().cpu() if a.grad is not None else torch.zeros_like(a[0]).cpu()) for a in out.attentions],
-        dim=0,
+    grads = tuple(
+        (a.grad.detach().cpu() if a.grad is not None else torch.zeros_like(a, device="cpu")) for a in out.attentions
     )
+    # The collator pads on the right and prepends [CLS] at column 0, so each row's real tokens
+    # are its leading attention_mask.sum() columns. Slicing to that length gives the same
+    # (seq, seq) matrices an unbatched forward produces.
+    lengths = batch["attention_mask"].sum(dim=1).to(torch.long).tolist()
 
-    scores = {
-        "raw": attn.raw_cls_attention(attn_lhss),
-        "rollout": attn.attention_rollout(attn_lhss),
-        "gradxatt": attn.grad_attention_rollout(attn_lhss, grad_lhss),
-    }
-    return scores, prob
+    results = []
+    for i, length in enumerate(lengths):
+        attn_lhss = attn.stack_example_attentions(tuple(a[:, :, :length, :length] for a in attentions), batch_index=i)
+        grad_lhss = attn.stack_example_attentions(tuple(g[:, :, :length, :length] for g in grads), batch_index=i)
+        scores = {
+            "raw": attn.raw_cls_attention(attn_lhss),
+            "rollout": attn.attention_rollout(attn_lhss),
+            "gradxatt": attn.grad_attention_rollout(attn_lhss, grad_lhss),
+        }
+        results.append((scores, probs[i], length))
+    return results
 
 
-def _accumulate(scores, prob, input_ids, tokenizer, acc, present, group_counts):
-    """Fold one patient's attribution into the cohort accumulators (in place)."""
+class _TokenLookup:
+    """Cached token-id to concept-id lookup; the tokenizer call per token is slow."""
+
+    def __init__(self, tokenizer):
+        self._tokenizer = tokenizer
+        self._cache: dict[int, str] = {}
+
+    def __call__(self, ids: list[int]) -> list[str]:
+        cache = self._cache
+        out = []
+        for i in ids:
+            tok = cache.get(i)
+            if tok is None:
+                tok = cache[i] = self._tokenizer.convert_id_to_token(i)
+            out.append(tok)
+        return out
+
+
+def _accumulate(scores, prob, ids, lookup, acc, present, group_counts):
+    """Fold one patient's attribution into the cohort accumulators (in place).
+
+    ``ids`` are the patient's real (unpadded) token ids; ``lookup`` maps them to concept ids.
+    """
     group = "pred_pos" if prob >= 0.5 else "pred_neg"
     group_counts[group] += 1
 
-    ids = input_ids[0].tolist()
-    concept_ids = [tokenizer.convert_id_to_token(i) for i in ids]
+    concept_ids = lookup(ids)
     keep = torch.tensor([c not in EXCLUDED_TOKENS for c in concept_ids], dtype=torch.bool)
     if not bool(keep.any()):
         return False
 
     seen_this_patient = set()
     for method, vec in scores.items():
-        dist = attn.normalize_over_real_tokens(vec, keep).tolist()
-        for pos, w in enumerate(dist):
-            if w <= 0:
-                continue
+        dist = attn.normalize_over_real_tokens(vec, keep)
+        # Positions in increasing order, as a full scan visits them, so the float sums match.
+        positive = torch.nonzero(dist > 0, as_tuple=True)[0].tolist()
+        weights = dist[positive].tolist()
+        acc_method = acc[group][method]
+        for pos, w in zip(positive, weights):
             cid = concept_ids[pos]
-            acc[group][method][cid] += w
+            acc_method[cid] += w
             if method == "raw" and cid not in seen_this_patient:
                 present[group][cid] += 1
                 seen_this_patient.add(cid)
     return True
+
+
+def _run_attribution(model, collator, dataset, n_run, batch_size, device, tokenizer):
+    """Attribute the first ``n_run`` patients in batches; return the cohort accumulators.
+
+    Returns ``(acc, present, group_counts, n_attributed, n_skipped)``. Patients with no concept
+    tokens are counted as skipped and never enter a batch.
+    """
+    acc = {g: {m: defaultdict(float) for m in attn.METHODS} for g in ("pred_pos", "pred_neg")}
+    present = {g: defaultdict(int) for g in ("pred_pos", "pred_neg")}
+    group_counts = defaultdict(int)
+    n_attributed = n_skipped = n_done = 0
+    lookup = _TokenLookup(tokenizer)
+    pending: list[dict] = []
+    t_start = time.perf_counter()
+
+    for idx in range(n_run):
+        record = _truncate_with_concepts(collator, dataset[idx])
+        if record is None:
+            n_skipped += 1
+        else:
+            pending.append(record)
+        if len(pending) < batch_size and idx + 1 < n_run:
+            continue
+        if pending:
+            batch = collator(pending)
+            input_ids = batch["input_ids"].tolist()
+            for row, (scores, prob, length) in zip(input_ids, _attribute_batch(model, batch, device)):
+                if _accumulate(scores, prob, row[:length], lookup, acc, present, group_counts):
+                    n_attributed += 1
+                else:
+                    n_skipped += 1
+            pending.clear()
+        n_prev, n_done = n_done, idx + 1
+        if n_done // 100 > n_prev // 100 or n_done == n_run:
+            rate = 60.0 * n_done / max(time.perf_counter() - t_start, 1e-9)
+            print(
+                f"  processed {n_done}/{n_run} (attributed={n_attributed}, skipped={n_skipped}, "
+                f"{rate:.0f} patients/min)",
+                flush=True,
+            )
+    return acc, present, group_counts, n_attributed, n_skipped
 
 
 def _concept_name(tokenizer, concept_id: str) -> str:
@@ -259,13 +351,16 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--max-patients", type=int, default=None, help="Cap the number of test patients processed (default: all)"
     )
-    parser.add_argument("--top-k", type=int, default=20, help="Concepts shown per method in the figure")
     parser.add_argument(
-        "--device", default=None, help="torch device (default: cuda when available, otherwise cpu)"
+        "--batch-size", type=int, default=32, help="Patients per forward/backward pass (1 = one at a time)"
     )
+    parser.add_argument("--top-k", type=int, default=20, help="Concepts shown per method in the figure")
+    parser.add_argument("--device", default=None, help="torch device (default: cuda when available, otherwise cpu)")
     parser.add_argument("--output-dir", default=None)
     parser.add_argument("--report-dir", default=None)
     args = parser.parse_args(argv)
+    if args.batch_size < 1:
+        parser.error("--batch-size must be at least 1")
     if args.device is None:
         args.device = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -283,6 +378,7 @@ def main(argv: list[str] | None = None) -> int:
     report.add_metric("run_label", label)
     report.add_metric("model_dir", args.model_dir)
     report.add_metric("device", args.device)
+    report.add_metric("batch_size", args.batch_size)
 
     # --- preflight --------------------------------------------------------
     model_ok = report.add_check(
@@ -333,25 +429,9 @@ def main(argv: list[str] | None = None) -> int:
     collator = _build_collator(tokenizer, max_length)
 
     # --- accumulate per-concept attribution by predicted class ------------
-    acc = {g: {m: defaultdict(float) for m in attn.METHODS} for g in ("pred_pos", "pred_neg")}
-    present = {g: defaultdict(int) for g in ("pred_pos", "pred_neg")}
-    group_counts = defaultdict(int)
-    n_attributed = n_skipped = 0
-
-    for idx in range(n_run):
-        batch = collator([_example_for_collator(dataset[idx])])
-        result = _attribute_one(model, batch, args.device)
-        if result is None:
-            n_skipped += 1
-            continue
-        scores, prob = result
-        ok = _accumulate(scores, prob, batch["input_ids"].cpu(), tokenizer, acc, present, group_counts)
-        if ok:
-            n_attributed += 1
-        else:
-            n_skipped += 1
-        if (idx + 1) % 100 == 0:
-            print(f"  processed {idx + 1}/{n_run} (attributed={n_attributed}, skipped={n_skipped})", flush=True)
+    acc, present, group_counts, n_attributed, n_skipped = _run_attribution(
+        model, collator, dataset, n_run, args.batch_size, args.device, tokenizer
+    )
 
     report.add_metric("patients_attributed", n_attributed)
     report.add_metric("patients_skipped_no_concepts", n_skipped)
